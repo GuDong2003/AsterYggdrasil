@@ -91,6 +91,7 @@ pub async fn start_minecraft_binding(
     let return_path = normalize_return_path(return_path)?;
     let redirect_uri = binding_callback_redirect_uri(state, req, provider_kind, &provider.key)?;
     let endpoints = microsoft_oauth_endpoints(&provider)?;
+    let configured_tenant = microsoft_provider_tenant(&provider)?;
     let state_value = format!("msbind_{}", aster_forge_utils::id::new_short_token());
     let pkce_verifier = build_pkce_verifier();
     let pkce_challenge = build_pkce_challenge(&pkce_verifier);
@@ -102,6 +103,27 @@ pub async fn start_minecraft_binding(
         &pkce_challenge,
         microsoft_minecraft_scopes(&provider),
     )?;
+    tracing::info!(
+        provider_id = provider.id,
+        provider_key = %provider.key,
+        microsoft_tenant = %configured_tenant,
+        legacy_issuer_url_present = provider
+            .issuer_url
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        manual_authorization_url_present = provider
+            .authorization_url
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        manual_token_url_present = provider
+            .token_url
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        authorization_endpoint = %endpoints.authorization_url,
+        token_endpoint = %endpoints.token_url,
+        scopes = %microsoft_minecraft_scopes(&provider),
+        "starting Microsoft Minecraft binding authorization"
+    );
 
     let now = Utc::now();
     let ttl = u64_to_i64(FLOW_TTL_SECS, "external auth binding flow ttl")?;
@@ -317,6 +339,17 @@ fn microsoft_oauth_endpoint_from_provider(
     provider: &external_auth_provider::Model,
     endpoint: &str,
 ) -> Result<String> {
+    let tenant = microsoft_provider_tenant(provider)?;
+    Ok(format!(
+        "{MICROSOFT_LOGIN_BASE}/{tenant}/oauth2/v2.0/{endpoint}"
+    ))
+}
+
+fn microsoft_provider_tenant(provider: &external_auth_provider::Model) -> Result<String> {
+    let options = parse_external_auth_provider_options(provider.options.as_ref());
+    if let Some(options) = options.microsoft.as_ref() {
+        return normalize_microsoft_tenant_input(Some(options.tenant.clone())).map_external_auth();
+    }
     if let Some(issuer_url) = provider
         .issuer_url
         .as_deref()
@@ -325,21 +358,9 @@ fn microsoft_oauth_endpoint_from_provider(
         && let Ok(url) = Url::parse(issuer_url)
         && let Some(tenant) = tenant_from_issuer_url(&url)
     {
-        let origin = url_origin(&url);
-        return Ok(format!("{origin}/{tenant}/oauth2/v2.0/{endpoint}"));
+        return normalize_microsoft_tenant_input(Some(tenant)).map_external_auth();
     }
-
-    let options = parse_external_auth_provider_options(provider.options.as_ref());
-    let tenant = normalize_microsoft_tenant_input(
-        options
-            .microsoft
-            .as_ref()
-            .map(|options| options.tenant.clone()),
-    )
-    .map_external_auth()?;
-    Ok(format!(
-        "{MICROSOFT_LOGIN_BASE}/{tenant}/oauth2/v2.0/{endpoint}"
-    ))
+    normalize_microsoft_tenant_input(None).map_external_auth()
 }
 
 fn tenant_from_issuer_url(url: &Url) -> Option<String> {
@@ -902,4 +923,79 @@ fn minecraft_binding_metadata(account: &MicrosoftMinecraftAccount) -> String {
         "xbox_user_hash": account.xbox_user_hash.as_deref(),
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::external_auth::{
+        ExternalAuthProtocol, ExternalAuthProviderKind, StoredExternalAuthProviderOptions,
+    };
+
+    fn microsoft_provider(
+        options: &str,
+        issuer_url: Option<&str>,
+    ) -> external_auth_provider::Model {
+        let now = Utc::now();
+        external_auth_provider::Model {
+            id: 1,
+            key: "microsoft".to_string(),
+            display_name: "Microsoft".to_string(),
+            icon_url: None,
+            provider_kind: ExternalAuthProviderKind::Microsoft,
+            protocol: ExternalAuthProtocol::Oidc,
+            options: StoredExternalAuthProviderOptions(options.to_string()),
+            issuer_url: issuer_url.map(str::to_string),
+            authorization_url: None,
+            token_url: None,
+            userinfo_url: None,
+            client_id: "client-id".to_string(),
+            client_secret: None,
+            scopes: "openid profile email".to_string(),
+            enabled: true,
+            auto_provision_enabled: false,
+            auto_link_verified_email_enabled: false,
+            require_email_verified: false,
+            subject_claim: None,
+            username_claim: None,
+            display_name_claim: None,
+            email_claim: None,
+            email_verified_claim: None,
+            groups_claim: None,
+            avatar_url_claim: None,
+            allowed_domains: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn microsoft_provider_tenant_prefers_options_over_legacy_issuer_url() {
+        let provider = microsoft_provider(
+            r#"{"microsoft":{"tenant":"consumers"}}"#,
+            Some("https://login.microsoftonline.com/common/v2.0"),
+        );
+
+        let endpoint = microsoft_oauth_endpoint_from_provider(&provider, "authorize").unwrap();
+
+        assert_eq!(
+            endpoint,
+            "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize"
+        );
+    }
+
+    #[test]
+    fn microsoft_provider_tenant_falls_back_to_legacy_issuer_url() {
+        let provider = microsoft_provider(
+            "{}",
+            Some("https://login.microsoftonline.com/consumers/v2.0"),
+        );
+
+        let endpoint = microsoft_oauth_endpoint_from_provider(&provider, "token").unwrap();
+
+        assert_eq!(
+            endpoint,
+            "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+        );
+    }
 }

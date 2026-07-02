@@ -387,18 +387,24 @@ async fn exchange_microsoft_minecraft_account(
         pkce_verifier,
     )
     .await?;
+    tracing::info!("Microsoft token obtained successfully");
+
     let xbox_live = authenticate_xbox_live(
         &http_client,
         &minecraft_endpoints.xbox_live_auth_url,
         &microsoft_token.access_token,
     )
     .await?;
+    tracing::info!(user_hash = %xbox_live.user_hash, "Xbox Live authentication successful");
+
     let xsts = authorize_xsts(
         &http_client,
         &minecraft_endpoints.xsts_authorize_url,
         &xbox_live.token,
     )
     .await?;
+    tracing::info!(user_hash = %xsts.user_hash, "XSTS authorization successful");
+
     let minecraft_token = login_minecraft_with_xbox(
         &http_client,
         &minecraft_endpoints.minecraft_login_with_xbox_url,
@@ -406,6 +412,7 @@ async fn exchange_microsoft_minecraft_account(
         &xsts.token,
     )
     .await?;
+    tracing::info!("Minecraft login successful");
     let profile = fetch_minecraft_profile(
         &http_client,
         &minecraft_endpoints.minecraft_profile_url,

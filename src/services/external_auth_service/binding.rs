@@ -624,7 +624,34 @@ async fn authorize_xsts(
         .map_err(|error| {
             AsterError::auth_invalid_credentials(format!("XSTS authorization failed: {error}"))
         })?;
-    let response: XboxAuthResponse = parse_json_response(response, "XSTS authorization").await?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+
+    // 参考 HMCL 和 PCL 的错误处理
+    // XSTS 可能返回 401，但响应体中包含详细错误信息
+    if status == 401 || status == 400 {
+        tracing::warn!(status = %status, body = %body, "XSTS authorization returned error");
+        // 检查特定错误码
+        if body.contains("2148916227") {
+            return Err(AsterError::auth_invalid_credentials("Xbox account is banned"));
+        } else if body.contains("2148916233") {
+            return Err(AsterError::auth_invalid_credentials("Xbox account not found, please register first"));
+        } else if body.contains("2148916235") {
+            return Err(AsterError::auth_invalid_credentials("Xbox service is not available in your region"));
+        } else if body.contains("2148916238") {
+            return Err(AsterError::auth_invalid_credentials("Xbox account age restriction, please update your birth date"));
+        }
+        return Err(AsterError::auth_invalid_credentials(format!("XSTS authorization failed: {body}")));
+    }
+
+    if !status.is_success() {
+        tracing::warn!(status = %status, body = %body, "XSTS authorization failed");
+        return Err(AsterError::auth_invalid_credentials("XSTS authorization failed"));
+    }
+
+    let response: XboxAuthResponse = serde_json::from_str(&body).map_err(|error| {
+        AsterError::auth_invalid_credentials(format!("XSTS response parse failed: {error}"))
+    })?;
     Ok(XboxToken {
         user_hash: xbox_user_hash(&response)?,
         token: response.token,

@@ -24,6 +24,7 @@
 			"userinfoUrl": "用户信息地址",
 			"scopes": "授权范围",
 			"callbackUrl": "回调 URL",
+			"bindingCallbackUrl": "绑定回调 URL",
 			"callbackUrlHint": "将此 URL 复制到 OAuth 提供方的回调配置中。",
 			"kindLabel": "提供方类型",
 			"primaryEndpoint": "主端点",

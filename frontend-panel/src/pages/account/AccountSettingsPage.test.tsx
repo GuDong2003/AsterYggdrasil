@@ -121,7 +121,7 @@ const emptyMicrosoftBindingProviderPage: ExternalAuthPublicProviderPage = {
 const microsoftBindingProviderPage: ExternalAuthPublicProviderPage = {
 	items: [
 		{
-			key: "ms-bind",
+			key: "microsoft",
 			kind: "microsoft",
 			display_name: "Microsoft",
 			icon_url: null,
@@ -449,7 +449,7 @@ describe("AccountSettingsPage", () => {
 		await waitFor(() =>
 			expect(
 				externalAuthServiceMock.startMinecraftBinding,
-			).toHaveBeenCalledWith("microsoft", "ms-bind", {
+			).toHaveBeenCalledWith("microsoft", "microsoft", {
 				return_path: "/account/settings",
 			}),
 		);

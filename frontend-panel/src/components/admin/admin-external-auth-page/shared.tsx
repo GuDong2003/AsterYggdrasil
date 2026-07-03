@@ -215,6 +215,16 @@ export function shouldShowManualEndpoints(
 	);
 }
 
+export function shouldShowScopes(
+	kind: ExternalAuthKind | ExternalAuthProviderKindInfo | null | undefined,
+	descriptor?: ExternalAuthProviderKindInfo | null,
+) {
+	return (
+		providerKindValue(kind) === "microsoft" ||
+		!providerUsesFixedConnection(kind, descriptor)
+	);
+}
+
 export function sortExternalAuthProviderKinds(
 	kinds: ExternalAuthProviderKindInfo[],
 ) {
@@ -484,22 +494,64 @@ function isRedactedSecret(value: string) {
 }
 
 export function callbackUrl(provider: AdminExternalAuthProviderInfo) {
-	const origin = typeof window === "undefined" ? "" : window.location.origin;
-	// LinuxDO uses a fixed callback path (no provider_key in URL)
-	if (provider.provider_kind === "linuxdo") {
-		return `${origin}/api/v1/auth/external-auth/linuxdo/callback`;
-	}
-	return provider.key
-		? `${origin}/api/v1/auth/external-auth/${encodeURIComponent(provider.provider_kind)}/${encodeURIComponent(provider.key)}/callback`
+	if (provider.provider_kind === "linuxdo") return linuxdoCallbackUrl();
+	const providerKey = publicCallbackProviderKey(provider);
+	return providerKey
+		? externalAuthCallbackUrl(provider.provider_kind, providerKey, "callback")
+		: "";
+}
+
+export function bindingCallbackUrl(provider: AdminExternalAuthProviderInfo) {
+	const providerKey = publicCallbackProviderKey(provider);
+	return providerKey
+		? externalAuthCallbackUrl(
+				provider.provider_kind,
+				providerKey,
+				"binding/callback",
+			)
 		: "";
 }
 
 /**
  * Returns the fixed callback URL for provider kinds that use a fixed path
- * (e.g., LinuxDO). Returns null for kinds that require a provider_key.
+ * (e.g., LinuxDO and Microsoft). Returns null for kinds that require a provider_key.
  */
 export function fixedCallbackUrl(kind: ExternalAuthKind): string | null {
-	if (kind !== "linuxdo") return null;
+	if (kind === "linuxdo") {
+		return linuxdoCallbackUrl();
+	}
+	if (kind === "microsoft") {
+		return externalAuthCallbackUrl("microsoft", "microsoft", "callback");
+	}
+	return null;
+}
+
+export function fixedBindingCallbackUrl(kind: ExternalAuthKind): string | null {
+	if (kind === "microsoft") {
+		return externalAuthCallbackUrl(
+			"microsoft",
+			"microsoft",
+			"binding/callback",
+		);
+	}
+	return null;
+}
+
+function publicCallbackProviderKey(provider: AdminExternalAuthProviderInfo) {
+	if (provider.provider_kind === "microsoft") return "microsoft";
+	return provider.key;
+}
+
+function externalAuthCallbackUrl(
+	kind: ExternalAuthKind,
+	providerKey: string,
+	suffix: "callback" | "binding/callback",
+) {
+	const origin = typeof window === "undefined" ? "" : window.location.origin;
+	return `${origin}/api/v1/auth/external-auth/${encodeURIComponent(kind)}/${encodeURIComponent(providerKey)}/${suffix}`;
+}
+
+function linuxdoCallbackUrl() {
 	const origin = typeof window === "undefined" ? "" : window.location.origin;
 	return `${origin}/api/v1/auth/external-auth/linuxdo/callback`;
 }

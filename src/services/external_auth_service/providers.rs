@@ -32,7 +32,8 @@ use super::normalize::{
 use super::{
     AdminExternalAuthProviderInfo, CreateExternalAuthProviderInput, ExternalAuthProviderKindInfo,
     ExternalAuthProviderTestCheck, ExternalAuthProviderTestParamsInput,
-    ExternalAuthProviderTestResult, ExternalAuthPublicProvider, UpdateExternalAuthProviderInput,
+    ExternalAuthProviderTestResult, ExternalAuthPublicProvider, MICROSOFT_PROVIDER_PUBLIC_KEY,
+    UpdateExternalAuthProviderInput, public_provider_key,
 };
 
 fn descriptor_to_info(
@@ -59,7 +60,7 @@ pub(super) fn provider_to_public(
     model: external_auth_provider::Model,
 ) -> ExternalAuthPublicProvider {
     ExternalAuthPublicProvider {
-        key: model.key,
+        key: public_provider_key(model.provider_kind, &model.key).to_string(),
         kind: model.provider_kind,
         display_name: model.display_name,
         icon_url: model.icon_url,
@@ -632,20 +633,8 @@ pub async fn create_provider(
     input: CreateExternalAuthProviderInput,
 ) -> Result<AdminExternalAuthProviderInfo> {
     let descriptor = registry::default_registry().descriptor_for(input.provider_kind)?;
-    let key =
-        aster_forge_utils::id::new_best_effort_uuid("external auth provider key", |candidate| {
-            let db = state.writer_db();
-            let provider_kind = input.provider_kind;
-            async move {
-                let candidate_key = candidate.to_string();
-                external_auth_provider_repo::find_by_kind_key(db, provider_kind, &candidate_key)
-                    .await
-                    .map(|provider| provider.is_some())
-            }
-        })
-        .await?
-        .to_string();
     let provider_kind = input.provider_kind;
+    let key = new_provider_key(state, provider_kind).await?;
     let legacy_issuer_url = input.issuer_url.clone();
     let display_name = normalize_required(&input.display_name, "display_name", 128)?;
     let icon_url = normalize_icon_url_input(input.icon_url)?;
@@ -784,6 +773,37 @@ pub async fn create_provider(
     };
     let provider = external_auth_provider_repo::create(state.writer_db(), model).await?;
     provider_to_admin(provider)
+}
+
+async fn new_provider_key(
+    state: &impl SharedRuntimeState,
+    provider_kind: ExternalAuthProviderKind,
+) -> Result<String> {
+    if provider_kind == ExternalAuthProviderKind::Microsoft
+        && external_auth_provider_repo::find_by_kind_key(
+            state.writer_db(),
+            provider_kind,
+            MICROSOFT_PROVIDER_PUBLIC_KEY,
+        )
+        .await?
+        .is_none()
+    {
+        return Ok(MICROSOFT_PROVIDER_PUBLIC_KEY.to_string());
+    }
+
+    Ok(
+        aster_forge_utils::id::new_best_effort_uuid("external auth provider key", |candidate| {
+            let db = state.writer_db();
+            async move {
+                let candidate_key = candidate.to_string();
+                external_auth_provider_repo::find_by_kind_key(db, provider_kind, &candidate_key)
+                    .await
+                    .map(|provider| provider.is_some())
+            }
+        })
+        .await?
+        .to_string(),
+    )
 }
 
 pub async fn update_provider(

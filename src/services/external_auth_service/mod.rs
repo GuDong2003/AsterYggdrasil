@@ -44,11 +44,33 @@ const DEFAULT_SCOPES: &str = "openid email profile";
 const FLOW_TTL_SECS: u64 = 300;
 const EMAIL_VERIFICATION_FLOW_TTL_SECS: u64 = 1_800;
 const REDACTED_SECRET: &str = "***REDACTED***";
+pub(super) const MICROSOFT_PROVIDER_PUBLIC_KEY: &str = "microsoft";
 const EXTERNAL_AUTH_USER_PASSWORD_BYTES: usize = 48;
 const EXTERNAL_AUTH_IDENTITY_NAMESPACE_MAX_LEN: usize = 512;
 const EXTERNAL_AUTH_URL_MAX_LEN: usize = 2048;
 const USERNAME_MAX_LEN: usize = 16;
 const USERNAME_MIN_LEN: usize = 4;
+
+pub(super) fn public_provider_key<'a>(
+    provider_kind: ExternalAuthProviderKind,
+    stored_key: &'a str,
+) -> &'a str {
+    if provider_kind == ExternalAuthProviderKind::Microsoft {
+        MICROSOFT_PROVIDER_PUBLIC_KEY
+    } else {
+        stored_key
+    }
+}
+
+pub(super) fn provider_key_matches(
+    provider_kind: ExternalAuthProviderKind,
+    stored_key: &str,
+    requested_key: &str,
+) -> bool {
+    stored_key == requested_key
+        || (provider_kind == ExternalAuthProviderKind::Microsoft
+            && requested_key == MICROSOFT_PROVIDER_PUBLIC_KEY)
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(all(debug_assertions, feature = "openapi"), derive(utoipa::ToSchema))]

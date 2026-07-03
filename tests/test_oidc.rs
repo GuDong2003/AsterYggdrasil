@@ -178,7 +178,10 @@ async fn admin_provider_kind_api_drives_create_contract() {
         .find(|kind| kind["kind"] == "microsoft")
         .expect("Microsoft kind should be listed");
     assert_eq!(microsoft["protocol"], "oidc");
-    assert_eq!(microsoft["default_scopes"], "openid profile email");
+    assert_eq!(
+        microsoft["default_scopes"],
+        "XboxLive.signin offline_access"
+    );
     assert_eq!(microsoft["issuer_url_required"], false);
     assert_eq!(microsoft["manual_endpoint_configuration_supported"], false);
     assert_eq!(microsoft["authorization_url_required"], false);

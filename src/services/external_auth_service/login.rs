@@ -26,6 +26,7 @@ use super::verification::create_pending_email_verification_flow;
 use super::{
     ExternalAuthCallbackOutcome, ExternalAuthCallbackQuery, ExternalAuthCallbackResult,
     ExternalAuthPrimaryLogin, ExternalAuthStartLoginResponse, FLOW_TTL_SECS,
+    MICROSOFT_PROVIDER_PUBLIC_KEY, provider_key_matches, public_provider_key,
 };
 
 const LINUXDO_TOKEN_URL: &str = "https://connect.linux.do/oauth2/token";
@@ -45,18 +46,7 @@ pub async fn start_login(
         has_return_path = return_path.is_some(),
         "starting external auth login"
     );
-    let provider = external_auth_provider_repo::find_by_kind_key(
-        state.writer_db(),
-        provider_kind,
-        &provider_key,
-    )
-    .await?
-    .ok_or_else(|| {
-        AsterError::record_not_found(format!(
-            "external auth provider '{}:{provider_key}'",
-            provider_kind.as_str()
-        ))
-    })?;
+    let provider = find_login_provider(state, provider_kind, &provider_key).await?;
     if !provider.enabled {
         tracing::debug!(
             provider_id = provider.id,
@@ -83,7 +73,9 @@ pub async fn start_login(
     }
 
     let return_path = normalize_return_path(return_path)?;
-    let redirect_uri = callback_redirect_uri(state, req, provider.provider_kind, &provider.key)?;
+    let redirect_provider_key = public_provider_key(provider.provider_kind, &provider.key);
+    let redirect_uri =
+        callback_redirect_uri(state, req, provider.provider_kind, redirect_provider_key)?;
     let auth_start = registry::default_registry()
         .get_driver(provider.provider_kind)?
         .start_authorization(&external_auth_provider_config(&provider), &redirect_uri)
@@ -119,6 +111,49 @@ pub async fn start_login(
         expires_in: None,
         interval: None,
     })
+}
+
+async fn find_login_provider(
+    state: &impl SharedRuntimeState,
+    provider_kind: ExternalAuthProviderKind,
+    provider_key: &str,
+) -> Result<external_auth_provider::Model> {
+    if let Some(provider) = external_auth_provider_repo::find_by_kind_key(
+        state.writer_db(),
+        provider_kind,
+        provider_key,
+    )
+    .await?
+    {
+        return Ok(provider);
+    }
+
+    if provider_kind == ExternalAuthProviderKind::Microsoft
+        && provider_key == MICROSOFT_PROVIDER_PUBLIC_KEY
+    {
+        let providers =
+            external_auth_provider_repo::find_enabled_by_kind(state.writer_db(), provider_kind)
+                .await?;
+        return match providers.len() {
+            1 => Ok(providers
+                .into_iter()
+                .next()
+                .expect("single provider should exist")),
+            0 => Err(AsterError::record_not_found(format!(
+                "external auth provider '{}:{provider_key}'",
+                provider_kind.as_str()
+            ))),
+            _ => Err(AsterError::validation_error_code(
+                AsterErrorCode::ExternalAuthProviderMisconfigured,
+                "multiple enabled Microsoft providers are configured; keep only one enabled Microsoft provider for the fixed callback URL",
+            )),
+        };
+    }
+
+    Err(AsterError::record_not_found(format!(
+        "external auth provider '{}:{provider_key}'",
+        provider_kind.as_str()
+    )))
 }
 
 pub async fn finish_callback(
@@ -183,7 +218,7 @@ pub async fn finish_callback(
     }
     if let Some(provider_key) = provider_key {
         let expected_key = normalize_key(provider_key)?;
-        if provider.key != expected_key {
+        if !provider_key_matches(provider.provider_kind, &provider.key, &expected_key) {
             tracing::debug!(
                 flow_id = flow.id,
                 provider_id = provider.id,

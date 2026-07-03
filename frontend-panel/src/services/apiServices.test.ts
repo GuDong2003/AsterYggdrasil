@@ -1212,7 +1212,7 @@ describe("externalAuthService", () => {
 					externalAuthProvider({
 						display_name: "Microsoft",
 						kind: "microsoft",
-						key: "ms-bind",
+						key: "microsoft",
 					}),
 				],
 				20,
@@ -1242,13 +1242,13 @@ describe("externalAuthService", () => {
 					externalAuthProvider({
 						display_name: "Microsoft",
 						kind: "microsoft",
-						key: "ms-bind",
+						key: "microsoft",
 					}),
 				],
 				20,
 			),
 		);
-		await externalAuthService.startMinecraftBinding("microsoft", "ms-bind", {
+		await externalAuthService.startMinecraftBinding("microsoft", "microsoft", {
 			return_path: "/account/settings",
 		});
 		await expect(
@@ -1262,7 +1262,7 @@ describe("externalAuthService", () => {
 			{ signal: undefined },
 		);
 		expect(apiMock.post).toHaveBeenCalledWith(
-			"/auth/external-auth/microsoft/ms-bind/binding/start",
+			"/auth/external-auth/microsoft/microsoft/binding/start",
 			{ return_path: "/account/settings" },
 		);
 		expect(apiMock.post).toHaveBeenCalledWith(

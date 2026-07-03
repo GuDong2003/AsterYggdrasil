@@ -28,6 +28,7 @@ import type {
 } from "@/types/api";
 import { ExternalAuthCreateProgress } from "./ExternalAuthCreateProgress";
 import {
+	bindingCallbackUrl,
 	callbackUrl,
 	connectionRequirementsMissing,
 	defaultScopesForKind,
@@ -35,6 +36,7 @@ import {
 	type ExternalAuthProviderFieldChange,
 	type ExternalAuthProviderFormData,
 	ExternalAuthProviderIcon,
+	fixedBindingCallbackUrl,
 	fixedCallbackUrl,
 	kindDescription,
 	kindDisplayName,
@@ -46,6 +48,7 @@ import {
 	STANDARD_CLAIMS,
 	shouldShowIssuerUrl,
 	shouldShowManualEndpoints,
+	shouldShowScopes,
 } from "./shared";
 
 export function ExternalAuthProviderDialog({
@@ -355,6 +358,7 @@ function ProviderFormFields({
 	);
 	const showIssuerUrl = shouldShowIssuerUrl(selectedKind);
 	const showManualEndpointFields = shouldShowManualEndpoints(selectedKind);
+	const showScopes = shouldShowScopes(form.providerKind, selectedKind);
 	const isMicrosoft = form.providerKind === "microsoft";
 	const isLinuxdo = form.providerKind === "linuxdo";
 	const microsoftTenantOptions = [
@@ -459,26 +463,42 @@ function ProviderFormFields({
 						const url = provider
 							? callbackUrl(provider)
 							: fixedCallbackUrl(form.providerKind);
+						const bindingUrl = isMicrosoft
+							? provider
+								? bindingCallbackUrl(provider)
+								: fixedBindingCallbackUrl(form.providerKind)
+							: null;
 						return url ? (
-							<Field label={t("admin.externalAuth.callbackUrl")}>
-								<div className="flex min-w-0 gap-2">
-									<Input readOnly value={url} />
-									<Button
-										type="button"
-										variant="outline"
-										size="icon"
-										onClick={() => onCopyCallbackUrl(url)}
-										aria-label={t("admin.externalAuth.copyCallback")}
-									>
-										<Icon name="Copy" className="size-4" />
-									</Button>
-								</div>
+							<div className="space-y-3">
+								<CallbackUrlField
+									label={t("admin.externalAuth.callbackUrl")}
+									url={url}
+									onCopyCallbackUrl={onCopyCallbackUrl}
+								/>
+								{bindingUrl ? (
+									<CallbackUrlField
+										label={t("admin.externalAuth.bindingCallbackUrl")}
+										url={bindingUrl}
+										onCopyCallbackUrl={onCopyCallbackUrl}
+									/>
+								) : null}
 								<p className="text-xs leading-5 text-muted-foreground">
 									{t("admin.externalAuth.callbackUrlHint")}
 								</p>
-							</Field>
+							</div>
 						) : null;
 					})()}
+					{showScopes ? (
+						<Field label={t("admin.externalAuth.scopes")}>
+							<Textarea
+								value={form.scopes}
+								rows={2}
+								onChange={(event) =>
+									onFieldChange("scopes", event.target.value)
+								}
+							/>
+						</Field>
+					) : null}
 					<div className="flex min-w-0 flex-wrap items-center gap-3">
 						<Button
 							type="button"
@@ -691,7 +711,7 @@ function ProviderFormFields({
 							</Field>
 						</>
 					) : null}
-					{fixedConnection ? null : (
+					{showScopes ? (
 						<Field
 							label={t("admin.externalAuth.scopes")}
 							className="md:col-span-2"
@@ -704,7 +724,7 @@ function ProviderFormFields({
 								}
 							/>
 						</Field>
-					)}
+					) : null}
 					<Field
 						label={t("admin.externalAuth.claims.subject")}
 						className="md:col-span-2"
@@ -785,6 +805,27 @@ function ProviderFormFields({
 									variant="outline"
 									size="icon"
 									onClick={() => onCopyCallbackUrl(callbackUrl(provider))}
+									aria-label={t("admin.externalAuth.copyCallback")}
+								>
+									<Icon name="Copy" className="size-4" />
+								</Button>
+							</div>
+						</Field>
+					) : null}
+					{provider && isMicrosoft ? (
+						<Field
+							label={t("admin.externalAuth.bindingCallbackUrl")}
+							className="md:col-span-2"
+						>
+							<div className="flex min-w-0 gap-2">
+								<Input readOnly value={bindingCallbackUrl(provider)} />
+								<Button
+									type="button"
+									variant="outline"
+									size="icon"
+									onClick={() =>
+										onCopyCallbackUrl(bindingCallbackUrl(provider))
+									}
 									aria-label={t("admin.externalAuth.copyCallback")}
 								>
 									<Icon name="Copy" className="size-4" />
@@ -966,6 +1007,7 @@ function ProviderSummaryPanel({
 		form.providerKind,
 		selectedKind,
 	);
+	const showScopes = shouldShowScopes(form.providerKind, selectedKind);
 	const primaryEndpoint = fixedConnection
 		? t(`admin.externalAuth.fixedConnection.${form.providerKind}.summary`)
 		: form.issuerUrl ||
@@ -992,11 +1034,11 @@ function ProviderSummaryPanel({
 				<SummaryItem label={t("admin.externalAuth.primaryEndpoint")}>
 					{primaryEndpoint}
 				</SummaryItem>
-				{fixedConnection ? null : (
+				{showScopes ? (
 					<SummaryItem label={t("admin.externalAuth.scopes")}>
 						{form.scopes.trim() || defaultScopesForKind(selectedKind)}
 					</SummaryItem>
-				)}
+				) : null}
 				<SummaryItem label={t("admin.externalAuth.status")}>
 					{form.enabled
 						? t("admin.externalAuth.enabled")
@@ -1017,8 +1059,43 @@ function ProviderSummaryPanel({
 						<span className="break-all font-mono">{callbackUrl(provider)}</span>
 					</SummaryItem>
 				) : null}
+				{provider && form.providerKind === "microsoft" ? (
+					<SummaryItem label={t("admin.externalAuth.bindingCallbackUrl")}>
+						<span className="break-all font-mono">
+							{bindingCallbackUrl(provider)}
+						</span>
+					</SummaryItem>
+				) : null}
 			</dl>
 		</aside>
+	);
+}
+
+function CallbackUrlField({
+	label,
+	onCopyCallbackUrl,
+	url,
+}: {
+	label: string;
+	onCopyCallbackUrl: (value: string) => void;
+	url: string;
+}) {
+	const { t } = useTranslation();
+	return (
+		<Field label={label}>
+			<div className="flex min-w-0 gap-2">
+				<Input readOnly value={url} />
+				<Button
+					type="button"
+					variant="outline"
+					size="icon"
+					onClick={() => onCopyCallbackUrl(url)}
+					aria-label={t("admin.externalAuth.copyCallback")}
+				>
+					<Icon name="Copy" className="size-4" />
+				</Button>
+			</div>
+		</Field>
 	);
 }
 

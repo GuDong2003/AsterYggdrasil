@@ -33,12 +33,18 @@ pub struct ExternalAuthProviderDescriptor {
 pub(crate) fn map_external_auth_provider_descriptor(
     descriptor: aster_forge_external_auth::ExternalAuthProviderDescriptor,
 ) -> ExternalAuthProviderDescriptor {
+    let kind = descriptor.kind.into();
+    let default_scopes = if kind == ExternalAuthProviderKind::Microsoft {
+        "XboxLive.signin offline_access"
+    } else {
+        descriptor.default_scopes
+    };
     ExternalAuthProviderDescriptor {
-        kind: descriptor.kind.into(),
+        kind,
         protocol: descriptor.protocol.into(),
         display_name: descriptor.display_name,
         description: descriptor.description,
-        default_scopes: descriptor.default_scopes,
+        default_scopes,
         issuer_url_required: descriptor.issuer_url_required,
         manual_endpoint_configuration_supported: descriptor.manual_endpoint_configuration_supported,
         authorization_url_required: descriptor.authorization_url_required,

@@ -18,7 +18,6 @@ use std::sync::{Arc, Mutex};
 
 const TEST_CLIENT_ID: &str = "minecraft-binding-client";
 const TEST_CLIENT_SECRET: &str = "minecraft-binding-secret";
-const HMCL_CLIENT_ID: &str = "00000000402b5328";
 const TEST_DEVICE_CODE: &str = "mock-device-code";
 const TEST_USER_CODE: &str = "ABCD-EFGH";
 const TEST_MINECRAFT_UUID: &str = "069a79f444e94726a5befca90e38aaf5";
@@ -42,7 +41,7 @@ struct DeviceCodeRequest {
 struct DeviceTokenRequest {
     grant_type: String,
     client_id: String,
-    code: String,
+    device_code: String,
 }
 
 async fn start_mock_microsoft_minecraft_provider()
@@ -85,7 +84,7 @@ async fn mock_device_code(
     form: web::Form<DeviceCodeRequest>,
 ) -> impl Responder {
     let request = form.into_inner();
-    assert_eq!(request.client_id, HMCL_CLIENT_ID);
+    assert_eq!(request.client_id, TEST_CLIENT_ID);
     assert_eq!(request.scope, "XboxLive.signin offline_access");
     provider
         .device_code_requests
@@ -110,8 +109,8 @@ async fn mock_token(
         request.grant_type,
         "urn:ietf:params:oauth:grant-type:device_code"
     );
-    assert_eq!(request.client_id, HMCL_CLIENT_ID);
-    assert_eq!(request.code, TEST_DEVICE_CODE);
+    assert_eq!(request.client_id, TEST_CLIENT_ID);
+    assert_eq!(request.device_code, TEST_DEVICE_CODE);
     provider
         .device_token_requests
         .lock()
@@ -269,11 +268,11 @@ async fn microsoft_provider_with_login_disabled_can_bind_minecraft_profile() {
     assert_eq!(resp.status(), 200);
     let body: Value = test::read_body_json(resp).await;
     assert_eq!(body["data"]["total"], 1);
-    assert_eq!(body["data"]["items"][0]["key"], "ms-bind");
+    assert_eq!(body["data"]["items"][0]["key"], "microsoft");
     assert_eq!(body["data"]["items"][0]["kind"], "microsoft");
 
     let req = test::TestRequest::post()
-        .uri("/api/v1/auth/external-auth/microsoft/ms-bind/binding/start")
+        .uri("/api/v1/auth/external-auth/microsoft/microsoft/binding/start")
         .insert_header(("Cookie", common::access_cookie_header(&access_token)))
         .insert_header(common::csrf_header_for(&access_token))
         .set_json(serde_json::json!({

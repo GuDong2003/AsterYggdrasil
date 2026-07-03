@@ -5,15 +5,20 @@ import type {
 	ExternalAuthProviderKindInfo,
 } from "@/types/api";
 import {
+	bindingCallbackUrl,
+	callbackUrl,
 	connectionRequirementsMissing,
 	createPayload,
 	defaultScopesForKind,
 	type ExternalAuthProviderFormData,
+	fixedBindingCallbackUrl,
+	fixedCallbackUrl,
 	formFromProvider,
 	microsoftTenantFromIssuerUrl,
 	microsoftTenantModeForValue,
 	parseAllowedDomains,
 	requiredFieldsMissing,
+	shouldShowScopes,
 	testParamsPayload,
 	updatePayload,
 } from "./shared";
@@ -75,6 +80,43 @@ function form(
 	};
 }
 
+function providerInfo(
+	overrides: Partial<AdminExternalAuthProviderInfo> = {},
+): AdminExternalAuthProviderInfo {
+	return {
+		allowed_domains: [],
+		authorization_url: null,
+		auto_link_verified_email_enabled: false,
+		auto_provision_enabled: false,
+		avatar_url_claim: null,
+		client_id: "client-id",
+		client_secret: null,
+		client_secret_configured: false,
+		created_at: "2026-01-01T00:00:00Z",
+		display_name: "Provider",
+		display_name_claim: null,
+		email_claim: null,
+		email_verified_claim: null,
+		enabled: true,
+		groups_claim: null,
+		icon_url: null,
+		id: 1,
+		issuer_url: null,
+		key: "provider",
+		options: {},
+		protocol: "oidc",
+		provider_kind: "oidc",
+		require_email_verified: true,
+		scopes: "openid email profile",
+		subject_claim: null,
+		token_url: null,
+		updated_at: "2026-01-01T00:00:00Z",
+		userinfo_url: null,
+		username_claim: null,
+		...overrides,
+	};
+}
+
 describe("external auth provider shared helpers", () => {
 	it("uses provider kind default scopes from the backend descriptor", () => {
 		expect(
@@ -91,6 +133,13 @@ describe("external auth provider shared helpers", () => {
 				}),
 			),
 		).toBe("openid email profile");
+		expect(
+			defaultScopesForKind(
+				providerKind("microsoft", {
+					default_scopes: "XboxLive.signin offline_access",
+				}),
+			),
+		).toBe("XboxLive.signin offline_access");
 	});
 
 	it("omits fixed connection URLs while preserving backend-provided scopes", () => {
@@ -129,6 +178,40 @@ describe("external auth provider shared helpers", () => {
 		expect(JSON.stringify(update)).not.toContain("userinfo_url");
 		expect(update).not.toHaveProperty("key");
 		expect(update).not.toHaveProperty("provider_kind");
+	});
+
+	it("shows scopes for Microsoft even though its endpoints are fixed", () => {
+		expect(shouldShowScopes("microsoft", providerKind("microsoft"))).toBe(true);
+		expect(shouldShowScopes("github", providerKind("github"))).toBe(false);
+		expect(
+			shouldShowScopes(
+				"generic_oauth2",
+				providerKind("generic_oauth2", {
+					manual_endpoint_configuration_supported: true,
+				}),
+			),
+		).toBe(true);
+	});
+
+	it("uses fixed public callback URLs for Microsoft login and binding", () => {
+		const provider = providerInfo({
+			key: "internal-ms-key",
+			provider_kind: "microsoft",
+		});
+		const origin = window.location.origin;
+
+		expect(callbackUrl(provider)).toBe(
+			`${origin}/api/v1/auth/external-auth/microsoft/microsoft/callback`,
+		);
+		expect(bindingCallbackUrl(provider)).toBe(
+			`${origin}/api/v1/auth/external-auth/microsoft/microsoft/binding/callback`,
+		);
+		expect(fixedCallbackUrl("microsoft")).toBe(
+			`${origin}/api/v1/auth/external-auth/microsoft/microsoft/callback`,
+		);
+		expect(fixedBindingCallbackUrl("microsoft")).toBe(
+			`${origin}/api/v1/auth/external-auth/microsoft/microsoft/binding/callback`,
+		);
 	});
 
 	it("keeps configurable URLs and scopes for generic OAuth2", () => {

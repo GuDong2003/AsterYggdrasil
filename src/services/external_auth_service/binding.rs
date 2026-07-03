@@ -19,14 +19,15 @@ use aster_forge_utils::numbers::u64_to_i64;
 use reqwest::Url;
 
 use super::normalize::{normalize_key, normalize_return_path, state_hash};
-use super::{ExternalAuthCallbackQuery, ExternalAuthStartLoginResponse};
+use super::{
+    ExternalAuthCallbackQuery, ExternalAuthStartLoginResponse, MICROSOFT_PROVIDER_PUBLIC_KEY,
+    provider_key_matches,
+};
 
 const MICROSOFT_LOGIN_BASE: &str = "https://login.microsoftonline.com";
 // HMCL 使用的旧 Live SDK 端点
 const LIVE_TOKEN_URL: &str = "https://login.live.com/oauth20_token.srf";
-// HMCL 的固定 Client ID（Minecraft 启动器常用）
-const HMCL_CLIENT_ID: &str = "00000000402b5328";
-// HMCL 设备代码流端点
+// Microsoft 设备代码流端点，固定使用 consumers tenant。
 const DEVICE_CODE_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
 const DEVICE_TOKEN_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
 
@@ -77,24 +78,56 @@ pub async fn start_minecraft_binding(
     return_path: Option<&str>,
 ) -> Result<ExternalAuthStartLoginResponse> {
     ensure_minecraft_binding_provider_kind(provider_kind)?;
+    let provider = find_minecraft_binding_provider(state, provider_kind, provider_key).await?;
+    ensure_provider_enabled(&provider)?;
+
+    // Minecraft 正版账号绑定默认使用设备代码流。
+    // 这样不依赖 Redirect URI，但仍需要后台 provider 配置有效的 Azure Client ID。
+    start_device_code_flow(state, user_id, &provider, return_path).await
+}
+
+async fn find_minecraft_binding_provider(
+    state: &impl SharedRuntimeState,
+    provider_kind: ExternalAuthProviderKind,
+    provider_key: &str,
+) -> Result<external_auth_provider::Model> {
     let provider_key = normalize_key(provider_key)?;
-    let provider = external_auth_provider_repo::find_by_kind_key(
+    if let Some(provider) = external_auth_provider_repo::find_by_kind_key(
         state.writer_db(),
         provider_kind,
         &provider_key,
     )
     .await?
-    .ok_or_else(|| {
-        AsterError::record_not_found(format!(
-            "external auth provider '{}:{provider_key}'",
-            provider_kind.as_str()
-        ))
-    })?;
-    ensure_provider_enabled(&provider)?;
+    {
+        return Ok(provider);
+    }
 
-    // Minecraft 正版账号绑定默认使用 HMCL 同款设备代码流。
-    // 这样不依赖站点自己的 Azure 应用注册和 Redirect URI 配置。
-    start_device_code_flow(state, user_id, &provider, return_path).await
+    if provider_kind == ExternalAuthProviderKind::Microsoft
+        && provider_key == MICROSOFT_PROVIDER_PUBLIC_KEY
+    {
+        let providers =
+            external_auth_provider_repo::find_enabled_by_kind(state.writer_db(), provider_kind)
+                .await?;
+        return match providers.len() {
+            1 => Ok(providers
+                .into_iter()
+                .next()
+                .expect("single provider should exist")),
+            0 => Err(AsterError::record_not_found(format!(
+                "external auth provider '{}:{provider_key}'",
+                provider_kind.as_str()
+            ))),
+            _ => Err(AsterError::validation_error_code(
+                AsterErrorCode::ExternalAuthProviderMisconfigured,
+                "multiple enabled Microsoft providers are configured; keep only one enabled Microsoft provider for the fixed callback URL",
+            )),
+        };
+    }
+
+    Err(AsterError::record_not_found(format!(
+        "external auth provider '{}:{provider_key}'",
+        provider_kind.as_str()
+    )))
 }
 
 async fn start_device_code_flow(
@@ -117,7 +150,7 @@ async fn start_device_code_flow(
         .header("Accept", "application/json")
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(form_urlencoded_body(&[
-            ("client_id", HMCL_CLIENT_ID.to_string()),
+            ("client_id", provider.client_id.clone()),
             ("scope", MICROSOFT_MINECRAFT_SCOPES.to_string()),
         ]))
         .send()
@@ -233,7 +266,7 @@ pub async fn finish_minecraft_binding_callback(
     }
     if let Some(provider_key) = provider_key {
         let expected_key = normalize_key(provider_key)?;
-        if provider.key != expected_key {
+        if !provider_key_matches(provider.provider_kind, &provider.key, &expected_key) {
             return Err(AsterError::auth_invalid_credentials(
                 "external auth binding callback provider does not match flow",
             ));
@@ -303,7 +336,8 @@ pub async fn check_device_code_status(
         .map_err(|error| AsterError::internal_error(format!("build HTTP client: {error}")))?;
 
     let token_url = microsoft_device_token_url(&provider)?;
-    let token_status = poll_device_code_token(&http_client, &token_url, device_code).await?;
+    let token_status =
+        poll_device_code_token(&http_client, &token_url, &provider.client_id, device_code).await?;
     let access_token = match token_status {
         DeviceCodeTokenStatus::Pending => return Ok(None),
         DeviceCodeTokenStatus::SlowDown => return Ok(None),
@@ -374,6 +408,7 @@ struct DeviceCodeTokenResponse {
 async fn poll_device_code_token(
     http_client: &reqwest::Client,
     token_url: &str,
+    client_id: &str,
     device_code: &str,
 ) -> Result<DeviceCodeTokenStatus> {
     let response = http_client
@@ -385,8 +420,8 @@ async fn poll_device_code_token(
                 "grant_type",
                 "urn:ietf:params:oauth:grant-type:device_code".to_string(),
             ),
-            ("code", device_code.to_string()),
-            ("client_id", HMCL_CLIENT_ID.to_string()),
+            ("device_code", device_code.to_string()),
+            ("client_id", client_id.to_string()),
         ]))
         .send()
         .await
@@ -694,15 +729,9 @@ async fn exchange_microsoft_code_for_token(
         .and_then(|m| m.legacy)
         .unwrap_or(false);
 
-    let client_id = if use_legacy {
-        HMCL_CLIENT_ID.to_string()
-    } else {
-        provider.client_id.clone()
-    };
-
     let mut form = vec![
         ("grant_type", "authorization_code".to_string()),
-        ("client_id", client_id),
+        ("client_id", provider.client_id.clone()),
         ("code", code.to_string()),
         ("redirect_uri", redirect_uri.to_string()),
         ("code_verifier", pkce_verifier.to_string()),

@@ -24,6 +24,7 @@
 			"userinfoUrl": "Userinfo URL",
 			"scopes": "Scopes",
 			"callbackUrl": "Callback URL",
+			"bindingCallbackUrl": "Binding callback URL",
 			"callbackUrlHint": "Copy this URL to the OAuth provider's callback configuration.",
 			"kindLabel": "Provider type",
 			"primaryEndpoint": "Primary endpoint",

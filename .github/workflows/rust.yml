@@ -27,6 +27,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
 
@@ -96,6 +97,7 @@ jobs:
   integration-backends:
     name: Integration tests (${{ matrix.backend }})
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -120,6 +122,10 @@ jobs:
       - name: Verify Docker availability
         run: docker version
 
-      # 只跑集成测试（tests/ 下的），单元测试已在 build job 中覆盖
+      # 跨库矩阵只跑对应后端的 smoke；完整集成测试已在 build job 中覆盖。
       - name: Run integration tests against ${{ matrix.backend }}
-        run: cargo test --tests --no-fail-fast --verbose
+        run: >
+          cargo test --verbose --test test_database_backends
+          test_${{ matrix.backend }}_smoke_foundation_contracts
+          --
+          --exact

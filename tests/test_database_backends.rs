@@ -319,7 +319,8 @@ async fn exercise_foundation_api_smoke(database_url: &str, backend: DbBackend) {
 
 #[actix_web::test]
 async fn test_sqlite_users_email_column_is_nullable_after_migrations() {
-    let state = common::setup().await;
+    let state = common::setup_with_database_url("sqlite::memory:").await;
+    assert_eq!(state.writer_db().get_database_backend(), DbBackend::Sqlite);
 
     assert_users_email_column_nullable(state.writer_db(), DbBackend::Sqlite).await;
 }

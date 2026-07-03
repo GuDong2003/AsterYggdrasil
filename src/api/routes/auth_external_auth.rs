@@ -59,6 +59,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/{kind}/{provider}/binding/callback",
                 web::get().to(finish_minecraft_binding),
             )
+            .service(
+                web::resource("/device-code/check")
+                    .wrap(JwtAuth)
+                    .route(web::post().to(check_device_code_status)),
+            )
             .route("/{kind}/{provider}/callback", web::get().to(finish_login))
             .route("/{kind}/callback", web::get().to(finish_login_auto_resolve)),
     );
@@ -843,6 +848,40 @@ fn add_auth_redirect_status(location: String, status: &str) -> String {
         next.push_str(hash);
     }
     next
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeviceCodeCheckRequest {
+    pub device_code: String,
+}
+
+pub async fn check_device_code_status(
+    state: web::Data<AppState>,
+    auth: JwtAuthInfo,
+    body: web::Json<DeviceCodeCheckRequest>,
+) -> Result<HttpResponse> {
+    let result = external_auth_service::binding::check_device_code_status(
+        &*state,
+        auth.user_id,
+        &body.device_code,
+    )
+    .await?;
+
+    match result {
+        Some(binding_result) => {
+            let profile = &binding_result.profile;
+            Ok(HttpResponse::Ok().json(serde_json::json!({
+                "status": "completed",
+                "profile": {
+                    "uuid": profile.uuid,
+                    "name": profile.name,
+                }
+            })))
+        }
+        None => Ok(HttpResponse::Ok().json(serde_json::json!({
+            "status": "pending"
+        }))),
+    }
 }
 
 #[cfg(test)]

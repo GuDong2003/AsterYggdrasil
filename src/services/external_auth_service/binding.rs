@@ -31,8 +31,12 @@ const LIVE_AUTHORIZE_URL: &str = "https://login.live.com/oauth20_authorize.srf";
 const LIVE_TOKEN_URL: &str = "https://login.live.com/oauth20_token.srf";
 // HMCL 的固定 Client ID（Minecraft 启动器常用）
 const HMCL_CLIENT_ID: &str = "00000000402b5328";
+// 设备代码流端点
+const DEVICE_CODE_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
 
 const MICROSOFT_MINECRAFT_SCOPES: &str = "XboxLive.signin offline_access";
+// HMCL 使用的本地重定向 URI
+const HMCL_REDIRECT_URI: &str = "http://localhost:29111/auth-response";
 const MINECRAFT_IDENTITY_NAMESPACE: &str = "https://api.minecraftservices.com/minecraft/profile";
 const XBOX_LIVE_AUTH_URL: &str = "https://user.auth.xboxlive.com/user/authenticate";
 const XSTS_AUTHORIZE_URL: &str = "https://xsts.auth.xboxlive.com/xsts/authorize";
@@ -71,6 +75,16 @@ struct MinecraftServicesEndpoints {
     minecraft_profile_url: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct DeviceCodeResponse {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: u64,
+    pub interval: u64,
+    pub message: String,
+}
+
 pub async fn start_minecraft_binding(
     state: &impl SharedRuntimeState,
     req: &actix_web::HttpRequest,
@@ -95,12 +109,7 @@ pub async fn start_minecraft_binding(
     })?;
     ensure_provider_enabled(&provider)?;
 
-    let return_path = normalize_return_path(return_path)?;
-    let redirect_uri = binding_callback_redirect_uri(state, req, provider_kind, &provider.key)?;
-    let endpoints = microsoft_oauth_endpoints(&provider)?;
-    let configured_tenant = microsoft_provider_tenant(&provider)?;
-
-    // 检查是否使用 legacy 模式，如果是则使用 HMCL 的 Client ID
+    // 检查是否使用 legacy 模式
     let options = parse_external_auth_provider_options(provider.options.as_ref());
     let use_legacy = options
         .microsoft
@@ -108,12 +117,17 @@ pub async fn start_minecraft_binding(
         .and_then(|m| m.legacy)
         .unwrap_or(false);
 
-    let client_id = if use_legacy {
-        tracing::info!(provider_id = provider.id, "Using HMCL Client ID for legacy mode");
-        HMCL_CLIENT_ID.to_string()
-    } else {
-        provider.client_id.clone()
-    };
+    if use_legacy {
+        // 使用设备代码流
+        return start_device_code_flow(state, user_id, &provider).await;
+    }
+
+    let return_path = normalize_return_path(return_path)?;
+    let redirect_uri = binding_callback_redirect_uri(state, req, provider_kind, &provider.key)?;
+    let endpoints = microsoft_oauth_endpoints(&provider)?;
+    let configured_tenant = microsoft_provider_tenant(&provider)?;
+
+    let client_id = provider.client_id.clone();
 
     let state_value = format!("msbind_{}", aster_forge_utils::id::new_short_token());
     let pkce_verifier = build_pkce_verifier();
@@ -166,6 +180,89 @@ pub async fn start_minecraft_binding(
     external_auth_binding_flow_repo::create(state.writer_db(), flow).await?;
 
     Ok(ExternalAuthStartLoginResponse { authorization_url })
+}
+
+async fn start_device_code_flow(
+    state: &impl SharedRuntimeState,
+    user_id: i64,
+    provider: &external_auth_provider::Model,
+) -> Result<ExternalAuthStartLoginResponse> {
+    let http_client = reqwest::Client::builder()
+        .user_agent(OUTBOUND_HTTP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(BINDING_HTTP_TIMEOUT_SECS))
+        .build()
+        .map_err(|error| AsterError::internal_error(format!("build HTTP client: {error}")))?;
+
+    // 请求设备代码
+    let response = http_client
+        .post(DEVICE_CODE_URL)
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", HMCL_CLIENT_ID),
+            ("scope", MICROSOFT_MINECRAFT_SCOPES),
+        ])
+        .send()
+        .await
+        .map_err(|error| {
+            AsterError::auth_invalid_credentials(format!("Device code request failed: {error}"))
+        })?;
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        tracing::warn!(status = %status, body = %body, "Device code request failed");
+        return Err(AsterError::auth_invalid_credentials("Device code request failed"));
+    }
+
+    let device_code_response: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
+        AsterError::auth_invalid_credentials(format!("Device code response parse failed: {error}"))
+    })?;
+
+    let device_code = device_code_response["device_code"]
+        .as_str()
+        .ok_or_else(|| AsterError::auth_invalid_credentials("Missing device_code in response"))?;
+    let user_code = device_code_response["user_code"]
+        .as_str()
+        .ok_or_else(|| AsterError::auth_invalid_credentials("Missing user_code in response"))?;
+    let verification_uri = device_code_response["verification_uri"]
+        .as_str()
+        .ok_or_else(|| AsterError::auth_invalid_credentials("Missing verification_uri in response"))?;
+    let expires_in = device_code_response["expires_in"].as_u64().unwrap_or(900);
+    let interval = device_code_response["interval"].as_u64().unwrap_or(5);
+
+    // 保存设备代码流信息到数据库
+    let now = Utc::now();
+    let ttl = u64_to_i64(FLOW_TTL_SECS, "external auth binding flow ttl")?;
+    let flow = external_auth_binding_flow::ActiveModel {
+        user_id: Set(user_id),
+        provider_id: Set(provider.id),
+        state_hash: Set(state_hash(device_code)),
+        nonce: Set(None),
+        pkce_verifier: Set(None),
+        redirect_uri: Set(device_code.to_string()),
+        return_path: Set(Some(verification_uri.to_string())),
+        created_at: Set(now),
+        expires_at: Set(now + Duration::seconds(ttl)),
+        consumed_at: Set(None),
+        ..Default::default()
+    };
+    external_auth_binding_flow_repo::create(state.writer_db(), flow).await?;
+
+    tracing::info!(
+        user_code = %user_code,
+        verification_uri = %verification_uri,
+        expires_in = expires_in,
+        "Device code flow started"
+    );
+
+    // 返回设备代码流信息，前端需要显示给用户
+    Ok(ExternalAuthStartLoginResponse {
+        authorization_url: format!(
+            "device:{}?user_code={}&verification_uri={}&expires_in={}&interval={}",
+            device_code, user_code, verification_uri, expires_in, interval
+        ),
+    })
 }
 
 pub async fn finish_minecraft_binding_callback(
@@ -242,6 +339,149 @@ pub async fn finish_minecraft_binding_callback(
         identity_linked: applied.identity_linked,
         profile_created: applied.profile_created,
         return_path: flow.return_path.unwrap_or_else(|| "/account".to_string()),
+    })
+}
+
+pub async fn check_device_code_status(
+    state: &impl SharedRuntimeState,
+    user_id: i64,
+    device_code: &str,
+) -> Result<Option<ExternalAuthMinecraftBindingCallbackResult>> {
+    let flow = external_auth_binding_flow_repo::consume_by_state_hash(
+        state.writer_db(),
+        &state_hash(device_code),
+        Utc::now(),
+    )
+    .await?;
+
+    let flow = match flow {
+        Some(f) => f,
+        None => return Ok(None),
+    };
+
+    if flow.user_id != user_id {
+        return Err(AsterError::auth_forbidden_code(
+            AsterErrorCode::ExternalAuthIdentityConflict,
+            "Device code flow does not belong to this user",
+        ));
+    }
+
+    let provider =
+        external_auth_provider_repo::find_by_id(state.writer_db(), flow.provider_id).await?;
+
+    // 尝试使用设备代码获取 token
+    let http_client = reqwest::Client::builder()
+        .user_agent(OUTBOUND_HTTP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(BINDING_HTTP_TIMEOUT_SECS))
+        .build()
+        .map_err(|error| AsterError::internal_error(format!("build HTTP client: {error}")))?;
+
+    let response = http_client
+        .post(LIVE_TOKEN_URL)
+        .header("Accept", "application/json")
+        .form(&[
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+            ("code", device_code),
+            ("client_id", HMCL_CLIENT_ID),
+        ])
+        .send()
+        .await
+        .map_err(|error| {
+            AsterError::auth_invalid_credentials(format!("Device code token request failed: {error}"))
+        })?;
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        // 检查是否是 authorization_pending 错误
+        if body.contains("authorization_pending") {
+            return Ok(None);
+        }
+        tracing::warn!(status = %status, body = %body, "Device code token request failed");
+        return Err(AsterError::auth_invalid_credentials("Device code token request failed"));
+    }
+
+    let token_response: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
+        AsterError::auth_invalid_credentials(format!("Token response parse failed: {error}"))
+    })?;
+
+    let access_token = token_response["access_token"]
+        .as_str()
+        .ok_or_else(|| AsterError::auth_invalid_credentials("Missing access_token in response"))?;
+
+    // 使用 access_token 完成 Minecraft 绑定
+    let account = exchange_microsoft_minecraft_account_with_token(
+        &http_client,
+        &provider,
+        access_token,
+    )
+    .await?;
+
+    let applied = apply_minecraft_binding(
+        state,
+        &provider,
+        flow.user_id,
+        user_role_for_binding(state, flow.user_id).await?,
+        &account,
+    )
+    .await?;
+
+    Ok(Some(ExternalAuthMinecraftBindingCallbackResult {
+        user_id: flow.user_id,
+        provider_id: provider.id,
+        identity_id: applied.identity.id,
+        profile: applied.profile,
+        identity_linked: applied.identity_linked,
+        profile_created: applied.profile_created,
+        return_path: flow.return_path.unwrap_or_else(|| "/account".to_string()),
+    }))
+}
+
+async fn exchange_microsoft_minecraft_account_with_token(
+    http_client: &reqwest::Client,
+    provider: &external_auth_provider::Model,
+    access_token: &str,
+) -> Result<MicrosoftMinecraftAccount> {
+    let endpoints = microsoft_oauth_endpoints(provider)?;
+    let minecraft_endpoints = minecraft_services_endpoints(&endpoints.token_url)?;
+
+    let xbox_live = authenticate_xbox_live(
+        http_client,
+        &minecraft_endpoints.xbox_live_auth_url,
+        access_token,
+    )
+    .await?;
+    tracing::info!(user_hash = %xbox_live.user_hash, "Xbox Live authentication successful");
+
+    let xsts = authorize_xsts(
+        http_client,
+        &minecraft_endpoints.xsts_authorize_url,
+        &xbox_live.token,
+    )
+    .await?;
+    tracing::info!(user_hash = %xsts.user_hash, "XSTS authorization successful");
+
+    let minecraft_token = login_minecraft_with_xbox(
+        http_client,
+        &minecraft_endpoints.minecraft_login_with_xbox_url,
+        &xsts.user_hash,
+        &xsts.token,
+    )
+    .await?;
+    tracing::info!("Minecraft login successful");
+
+    let profile = fetch_minecraft_profile(
+        http_client,
+        &minecraft_endpoints.minecraft_profile_url,
+        &minecraft_token.access_token,
+    )
+    .await?;
+
+    Ok(MicrosoftMinecraftAccount {
+        uuid: normalize_minecraft_uuid(&profile.id)?,
+        name: profile.name,
+        xbox_user_hash: Some(xsts.user_hash),
     })
 }
 

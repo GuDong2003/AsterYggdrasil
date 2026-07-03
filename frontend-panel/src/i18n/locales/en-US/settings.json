@@ -376,6 +376,28 @@
 	"settings_item_task_list_max_limit_desc": "Maximum page size accepted by background task list APIs.",
 	"settings_item_maintenance_cleanup_interval_secs_label": "Maintenance cleanup interval",
 	"settings_item_maintenance_cleanup_interval_secs_desc": "Default interval for maintenance cleanup loops.",
+	"config": {
+		"yggdrasil_max_profiles_per_user": {
+			"label": "Profile limit per user",
+			"description": "Maximum number of Minecraft profiles a single user can own."
+		},
+		"yggdrasil_max_profile_renames": {
+			"label": "Profile rename limit",
+			"description": "Maximum number of profile renames allowed per user."
+		},
+		"yggdrasil_mojang_name_check_enabled": {
+			"label": "Check Mojang name occupancy",
+			"description": "Check whether a name is already occupied by a Mojang profile before creating a local Minecraft profile."
+		},
+		"yggdrasil_mojang_name_check_timeout_secs": {
+			"label": "Mojang name check timeout",
+			"description": "Timeout in seconds for Mojang profile name occupancy checks."
+		},
+		"yggdrasil_mojang_profile_api_base_url": {
+			"label": "Mojang profile API base URL",
+			"description": "Mojang profile API base URL used to check official username occupancy."
+		}
+	},
 	"personalSettings": {
 		"badge": "Account profile",
 		"title": "Personal settings",

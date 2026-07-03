@@ -49,7 +49,7 @@
 		"name": "名称",
 		"type": "类型",
 		"actions": "操作",
-		"metadataLoadFailed": "metadata 加载失败",
+		"metadataLoadFailed": "元数据加载失败",
 		"configLoadFailed": "前端配置加载失败"
 	},
 	"shell": {

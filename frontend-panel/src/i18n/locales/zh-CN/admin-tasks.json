@@ -80,7 +80,7 @@
 				"runtime_task_system_health_check": "系统健康检查",
 				"runtime_task_task_cleanup": "任务记录清理",
 				"runtime_task_yggdrasil_storage_consistency_check": "Yggdrasil 存储一致性检查",
-				"runtime_task_yggdrasil_token_cleanup": "Yggdrasil token 清理",
+				"runtime_task_yggdrasil_token_cleanup": "Yggdrasil 令牌清理",
 				"runtime_task_yggdrasil_texture_cleanup": "Yggdrasil 材质清理",
 				"status_text_failed": "失败：{{error}}",
 				"status_text_quiet": "无变化",

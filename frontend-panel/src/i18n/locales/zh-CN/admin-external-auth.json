@@ -20,7 +20,7 @@
 			"clientSecret": "客户端密钥",
 			"issuerUrl": "签发者 URL",
 			"authorizationUrl": "授权地址",
-			"tokenUrl": "Token 地址",
+			"tokenUrl": "令牌地址",
 			"userinfoUrl": "用户信息地址",
 			"scopes": "授权范围",
 			"callbackUrl": "回调 URL",
@@ -72,13 +72,13 @@
 				"qq": "QQ"
 			},
 			"kindDesc": {
-				"generic_oauth2": "手动配置授权、token 和用户信息端点，适合非标准 OAuth2 服务。",
+				"generic_oauth2": "手动配置授权、令牌和用户信息端点，适合非标准 OAuth2 服务。",
 				"github": "使用 GitHub OAuth App 登录，并从用户邮箱 API 读取已验证主邮箱。",
 				"google": "使用 Google OpenID Connect 登录，issuer 和邮箱验证语义由系统固定。",
 				"linuxdo": "使用 LinuxDO OAuth2 登录，端点由系统固定；可设置最低信任等级，低于该等级的用户将被拒绝。",
 				"microsoft": "使用 Microsoft 或 Entra ID 登录，issuer 由 Microsoft provider 规则处理。",
 				"oidc": "通过 issuer 发现文档读取授权端点，适合标准 OIDC 服务。",
-				"qq": "使用 QQ 互联 OAuth2 登录，token、openid 和用户信息端点由系统固定。"
+				"qq": "使用 QQ 互联 OAuth2 登录，令牌、openid 和用户信息端点由系统固定。"
 			},
 			"fixedConnection": {
 				"title": "固定连接参数",
@@ -95,8 +95,8 @@
 					"summary": "LinuxDO 固定 OAuth2 端点"
 				},
 				"microsoft": {
-					"description": "Microsoft 使用固定 identity platform 规则生成 issuer，无需填写自定义授权、token 或用户信息端点。",
-					"summary": "Microsoft identity platform"
+					"description": "Microsoft 使用固定标识平台规则生成发行方，无需填写自定义授权、令牌或用户信息端点。",
+					"summary": "Microsoft 标识平台"
 				},
 				"qq": {
 					"description": "QQ 使用固定 OAuth2、openid、用户信息端点和默认授权范围；只需填写 QQ 互联应用凭据。",
@@ -105,7 +105,7 @@
 			},
 			"microsoftTenant": {
 				"label": "Microsoft 租户",
-				"hint": "选择 Microsoft identity platform 租户范围；自定义值可填写租户 ID 或域名。",
+				"hint": "选择 Microsoft 标识平台租户范围；自定义值可填写租户 ID 或域名。",
 				"consumers": "个人 Microsoft 账户",
 				"organizations": "任意组织租户",
 				"common": "个人和组织账户",

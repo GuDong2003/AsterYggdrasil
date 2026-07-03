@@ -61,6 +61,7 @@ use utoipa::{Modify, OpenApi};
         crate::api::routes::auth_external_auth::finish_login,
         crate::api::routes::auth_external_auth::start_minecraft_binding,
         crate::api::routes::auth_external_auth::finish_minecraft_binding,
+        crate::api::routes::auth_external_auth::check_device_code_status,
         crate::api::routes::auth_external_auth::start_email_verification,
         crate::api::routes::auth_external_auth::confirm_email_verification,
         crate::api::routes::auth_external_auth::link_with_password,

@@ -113,6 +113,11 @@ pub async fn start_login(
 
     Ok(ExternalAuthStartLoginResponse {
         authorization_url: auth_start.authorization_url,
+        device_code: None,
+        user_code: None,
+        verification_uri: None,
+        expires_in: None,
+        interval: None,
     })
 }
 

@@ -851,18 +851,51 @@ fn add_auth_redirect_status(location: String, status: &str) -> String {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(all(debug_assertions, feature = "openapi"), derive(utoipa::ToSchema))]
 pub struct DeviceCodeCheckRequest {
     pub device_code: String,
 }
 
+#[derive(Debug, Serialize)]
+#[cfg_attr(all(debug_assertions, feature = "openapi"), derive(utoipa::ToSchema))]
+pub struct DeviceCodeCheckProfile {
+    pub uuid: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(all(debug_assertions, feature = "openapi"), derive(utoipa::ToSchema))]
+pub struct DeviceCodeCheckResponse {
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<DeviceCodeCheckProfile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_created: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_linked: Option<bool>,
+}
+
+#[aster_forge_api_docs_macros::path(
+    post,
+    path = "/api/v1/auth/external-auth/device-code/check",
+    tag = "external-auth",
+    operation_id = "auth_external_auth_check_device_code_status",
+    request_body = DeviceCodeCheckRequest,
+    responses(
+        (status = 200, description = "Microsoft Minecraft device code binding status", body = inline(ApiResponse<DeviceCodeCheckResponse>)),
+        (status = 401, description = "Not authenticated"),
+        (status = 403, description = "Device code flow belongs to another user"),
+    ),
+    security(("bearer" = [])),
+)]
 pub async fn check_device_code_status(
     state: web::Data<AppState>,
-    auth: JwtAuthInfo,
+    user: web::ReqData<AuthUserInfo>,
     body: web::Json<DeviceCodeCheckRequest>,
 ) -> Result<HttpResponse> {
-    let result = external_auth_service::binding::check_device_code_status(
-        &*state,
-        auth.user_id,
+    let result = external_auth_service::check_device_code_status(
+        state.get_ref(),
+        user.id,
         &body.device_code,
     )
     .await?;
@@ -870,17 +903,26 @@ pub async fn check_device_code_status(
     match result {
         Some(binding_result) => {
             let profile = &binding_result.profile;
-            Ok(HttpResponse::Ok().json(serde_json::json!({
-                "status": "completed",
-                "profile": {
-                    "uuid": profile.uuid,
-                    "name": profile.name,
-                }
-            })))
+            Ok(
+                HttpResponse::Ok().json(ApiResponse::ok(DeviceCodeCheckResponse {
+                    status: "completed",
+                    profile: Some(DeviceCodeCheckProfile {
+                        uuid: profile.uuid.clone(),
+                        name: profile.name.clone(),
+                    }),
+                    profile_created: Some(binding_result.profile_created),
+                    identity_linked: Some(binding_result.identity_linked),
+                })),
+            )
         }
-        None => Ok(HttpResponse::Ok().json(serde_json::json!({
-            "status": "pending"
-        }))),
+        None => Ok(
+            HttpResponse::Ok().json(ApiResponse::ok(DeviceCodeCheckResponse {
+                status: "pending",
+                profile: None,
+                profile_created: None,
+                identity_linked: None,
+            })),
+        ),
     }
 }
 

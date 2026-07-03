@@ -20,6 +20,14 @@ import { LoginDevicesSection } from "@/components/settings/LoginDevicesSection";
 import { SecurityPasskeysSection } from "@/components/settings/SecurityPasskeysSection";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { Icon, type IconName } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -56,6 +64,7 @@ type PasswordFormTouched = Record<PasswordFieldName, boolean>;
 type PasswordFormErrors = Partial<Record<PasswordFieldName, string>>;
 
 const EXTERNAL_AUTH_LINK_PAGE_SIZE = 20;
+const DEVICE_CODE_MIN_POLL_INTERVAL_MS = 1000;
 const passwordInitialValues: PasswordFormValues = {
 	confirmPassword: "",
 	currentPassword: "",
@@ -88,6 +97,16 @@ type ExternalAuthLinksState = {
 	links: ExternalAuthLinkInfo[];
 	linkTotal: number;
 	loading: boolean;
+};
+type MinecraftDeviceBindingState = {
+	providerKey: string;
+	providerDisplayName: string;
+	deviceCode: string;
+	userCode: string;
+	verificationUri: string;
+	expiresIn: number;
+	expiresAt: number;
+	intervalMs: number;
 };
 type ExternalAuthLinksAction =
 	| { type: "loaded"; links: ExternalAuthLinkInfo[]; total: number }
@@ -432,6 +451,9 @@ function ExternalAuthLinksSection() {
 	>([]);
 	const [bindingLoading, setBindingLoading] = useState(false);
 	const [bindingBusyKey, setBindingBusyKey] = useState<string | null>(null);
+	const [deviceBinding, setDeviceBinding] =
+		useState<MinecraftDeviceBindingState | null>(null);
+	const [devicePolling, setDevicePolling] = useState(false);
 	const [cursorStack, setCursorStack] = useState<DateTimeIdCursor[]>([]);
 	const [nextCursor, setNextCursor] = useState<DateTimeIdCursor | null>(null);
 	const { busyId, links, linkTotal, loading } = state;
@@ -502,6 +524,64 @@ function ExternalAuthLinksSection() {
 		return () => controller.abort();
 	}, []);
 
+	useEffect(() => {
+		if (!deviceBinding) return;
+
+		let cancelled = false;
+		let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+		async function poll() {
+			if (!deviceBinding || cancelled) return;
+			if (Date.now() >= deviceBinding.expiresAt) {
+				toast.error(t("personalSettings.minecraftBindingDeviceExpired"));
+				setDeviceBinding(null);
+				setBindingBusyKey(null);
+				return;
+			}
+
+			setDevicePolling(true);
+			try {
+				const result = await externalAuthService.checkMinecraftDeviceCode({
+					device_code: deviceBinding.deviceCode,
+				});
+				if (cancelled) return;
+				if (result.status === "completed") {
+					setDeviceBinding(null);
+					setBindingBusyKey(null);
+					setDevicePolling(false);
+					toast.success(
+						result.profile_created
+							? t("personalSettings.minecraftBindingSucceededCreated")
+							: t("personalSettings.minecraftBindingSucceededExisting"),
+					);
+					await reload();
+					return;
+				}
+			} catch (error) {
+				if (!cancelled) {
+					toast.error(formatUnknownError(error));
+					setDeviceBinding(null);
+					setBindingBusyKey(null);
+				}
+				return;
+			} finally {
+				if (!cancelled) {
+					setDevicePolling(false);
+				}
+			}
+
+			timeoutId = setTimeout(poll, deviceBinding.intervalMs);
+		}
+
+		timeoutId = setTimeout(poll, deviceBinding.intervalMs);
+		return () => {
+			cancelled = true;
+			if (timeoutId) {
+				clearTimeout(timeoutId);
+			}
+		};
+	}, [deviceBinding, reload, t]);
+
 	async function unlink(link: ExternalAuthLinkInfo) {
 		if (!link.allow_unlink) return;
 		dispatch({ type: "set_busy_id", value: link.id });
@@ -524,6 +604,29 @@ function ExternalAuthLinksSection() {
 				provider.key,
 				{ return_path: accountPaths.settings },
 			);
+			if (
+				response.device_code &&
+				response.user_code &&
+				response.verification_uri
+			) {
+				const expiresIn = Math.max(response.expires_in ?? 900, 1);
+				const intervalMs =
+					Math.max(
+						response.interval ?? 5,
+						DEVICE_CODE_MIN_POLL_INTERVAL_MS / 1000,
+					) * 1000;
+				setDeviceBinding({
+					providerKey: provider.key,
+					providerDisplayName: provider.display_name,
+					deviceCode: response.device_code,
+					userCode: response.user_code,
+					verificationUri: response.verification_uri,
+					expiresIn,
+					expiresAt: Date.now() + expiresIn * 1000,
+					intervalMs,
+				});
+				return;
+			}
 			window.location.assign(response.authorization_url);
 		} catch (error) {
 			toast.error(formatUnknownError(error));
@@ -531,163 +634,241 @@ function ExternalAuthLinksSection() {
 		}
 	}
 
+	function cancelDeviceBinding() {
+		setDeviceBinding(null);
+		setBindingBusyKey(null);
+		setDevicePolling(false);
+	}
+
 	return (
-		<div className="rounded-lg border border-border/70 bg-background/55 dark:border-white/10 dark:bg-input/10">
-			<div className="flex flex-col gap-3 border-b border-border/70 px-4 py-4 sm:flex-row sm:items-center sm:justify-between dark:border-white/10">
-				<div>
-					<h3 className="text-sm font-semibold">
-						{t("personalSettings.externalAuthTitle")}
-					</h3>
-					<p className="mt-1 text-xs leading-5 text-muted-foreground">
-						{t("personalSettings.externalAuthDescription")}
-					</p>
-				</div>
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					disabled={loading}
-					onClick={() => void reload()}
-				>
-					<Icon
-						name={loading ? "Spinner" : "ArrowClockwise"}
-						className={cn("mr-2 size-4", loading && "animate-spin")}
-					/>
-					{t("common.refresh")}
-				</Button>
-			</div>
-
-			{bindingProviders.length > 0 ? (
-				<div className="flex flex-col gap-3 border-b border-border/70 px-4 py-3 sm:flex-row sm:items-center sm:justify-between dark:border-white/10">
-					<div className="min-w-0 text-sm font-semibold">
-						{t("personalSettings.minecraftBindingTitle")}
+		<>
+			<div className="rounded-lg border border-border/70 bg-background/55 dark:border-white/10 dark:bg-input/10">
+				<div className="flex flex-col gap-3 border-b border-border/70 px-4 py-4 sm:flex-row sm:items-center sm:justify-between dark:border-white/10">
+					<div>
+						<h3 className="text-sm font-semibold">
+							{t("personalSettings.externalAuthTitle")}
+						</h3>
+						<p className="mt-1 text-xs leading-5 text-muted-foreground">
+							{t("personalSettings.externalAuthDescription")}
+						</p>
 					</div>
-					<div className="flex flex-wrap gap-2 sm:justify-end">
-						{bindingProviders.map((provider) => {
-							const linked = linkedProviderKeys.has(provider.key);
-							const busy = bindingBusyKey === provider.key;
-							return (
-								<Button
-									key={provider.key}
-									type="button"
-									variant={linked ? "outline" : "default"}
-									size="sm"
-									disabled={bindingLoading || bindingBusyKey !== null || linked}
-									onClick={() => void startMinecraftBinding(provider)}
-								>
-									<Icon
-										name={
-											busy ? "Spinner" : linked ? "Check" : "ArrowSquareOut"
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						disabled={loading}
+						onClick={() => void reload()}
+					>
+						<Icon
+							name={loading ? "Spinner" : "ArrowClockwise"}
+							className={cn("mr-2 size-4", loading && "animate-spin")}
+						/>
+						{t("common.refresh")}
+					</Button>
+				</div>
+
+				{bindingProviders.length > 0 ? (
+					<div className="flex flex-col gap-3 border-b border-border/70 px-4 py-3 sm:flex-row sm:items-center sm:justify-between dark:border-white/10">
+						<div className="min-w-0 text-sm font-semibold">
+							{t("personalSettings.minecraftBindingTitle")}
+						</div>
+						<div className="flex flex-wrap gap-2 sm:justify-end">
+							{bindingProviders.map((provider) => {
+								const linked = linkedProviderKeys.has(provider.key);
+								const busy = bindingBusyKey === provider.key;
+								return (
+									<Button
+										key={provider.key}
+										type="button"
+										variant={linked ? "outline" : "default"}
+										size="sm"
+										disabled={
+											bindingLoading || bindingBusyKey !== null || linked
 										}
-										className={cn("mr-2 size-4", busy && "animate-spin")}
-									/>
-									{linked
-										? t("personalSettings.minecraftBindingBound")
-										: t("personalSettings.minecraftBindingStart", {
-												provider: provider.display_name,
-											})}
-								</Button>
-							);
-						})}
+										onClick={() => void startMinecraftBinding(provider)}
+									>
+										<Icon
+											name={
+												busy ? "Spinner" : linked ? "Check" : "ArrowSquareOut"
+											}
+											className={cn("mr-2 size-4", busy && "animate-spin")}
+										/>
+										{linked
+											? t("personalSettings.minecraftBindingBound")
+											: t("personalSettings.minecraftBindingStart", {
+													provider: provider.display_name,
+												})}
+									</Button>
+								);
+							})}
+						</div>
 					</div>
-				</div>
-			) : null}
+				) : null}
 
-			<div className="divide-y divide-border/70 dark:divide-white/10">
-				{loading ? (
-					<div className="px-4 py-6 text-sm text-muted-foreground">
-						{t("common.loading")}
-					</div>
-				) : links.length === 0 ? (
-					<div className="px-4 py-6 text-sm text-muted-foreground">
-						{t("personalSettings.externalAuthEmpty")}
-					</div>
-				) : (
-					links.map((link) => (
-						<div
-							key={link.id}
-							className="grid gap-3 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-						>
-							<div className="flex min-w-0 items-center gap-3">
-								<img
-									src={
-										link.provider_icon_url ||
-										externalAuthKindIconPath(link.provider_kind)
-									}
-									alt=""
-									className="size-8 rounded-md border border-border/70 bg-background object-contain p-1 dark:border-white/10"
-								/>
-								<div className="min-w-0">
-									<div className="truncate text-sm font-semibold">
-										{link.provider_display_name}
-									</div>
-									<div className="mt-1 truncate text-xs text-muted-foreground">
-										{link.email_snapshot ||
-											link.display_name_snapshot ||
-											link.subject}
+				<div className="divide-y divide-border/70 dark:divide-white/10">
+					{loading ? (
+						<div className="px-4 py-6 text-sm text-muted-foreground">
+							{t("common.loading")}
+						</div>
+					) : links.length === 0 ? (
+						<div className="px-4 py-6 text-sm text-muted-foreground">
+							{t("personalSettings.externalAuthEmpty")}
+						</div>
+					) : (
+						links.map((link) => (
+							<div
+								key={link.id}
+								className="grid gap-3 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+							>
+								<div className="flex min-w-0 items-center gap-3">
+									<img
+										src={
+											link.provider_icon_url ||
+											externalAuthKindIconPath(link.provider_kind)
+										}
+										alt=""
+										className="size-8 rounded-md border border-border/70 bg-background object-contain p-1 dark:border-white/10"
+									/>
+									<div className="min-w-0">
+										<div className="truncate text-sm font-semibold">
+											{link.provider_display_name}
+										</div>
+										<div className="mt-1 truncate text-xs text-muted-foreground">
+											{link.email_snapshot ||
+												link.display_name_snapshot ||
+												link.subject}
+										</div>
 									</div>
 								</div>
-							</div>
-							<div className="flex flex-wrap items-center gap-2 sm:justify-end">
-								<Badge variant="outline" className="rounded-md">
-									{link.provider_kind}
-								</Badge>
-								{link.provider_kind === "linuxdo" ? (
-									<LinuxDoTrustLevelBadge metadata={link.metadata} />
-								) : null}
-								{link.allow_unlink ? null : (
-									<Badge variant="secondary" className="rounded-md">
-										{t("personalSettings.externalAuthUnlinkDisabled")}
+								<div className="flex flex-wrap items-center gap-2 sm:justify-end">
+									<Badge variant="outline" className="rounded-md">
+										{link.provider_kind}
 									</Badge>
-								)}
+									{link.provider_kind === "linuxdo" ? (
+										<LinuxDoTrustLevelBadge metadata={link.metadata} />
+									) : null}
+									{link.allow_unlink ? null : (
+										<Badge variant="secondary" className="rounded-md">
+											{t("personalSettings.externalAuthUnlinkDisabled")}
+										</Badge>
+									)}
+									<Button
+										type="button"
+										size="sm"
+										variant="outline"
+										disabled={busyId === link.id || !link.allow_unlink}
+										onClick={() => void unlink(link)}
+										className={cn(
+											link.allow_unlink &&
+												"border-destructive/35 text-destructive hover:border-destructive/60 hover:bg-destructive/10 hover:text-destructive",
+										)}
+									>
+										<Icon
+											name={busyId === link.id ? "Spinner" : "Trash"}
+											className={cn(
+												"mr-2 size-4",
+												busyId === link.id && "animate-spin",
+											)}
+										/>
+										{t("personalSettings.externalAuthUnlink")}
+									</Button>
+								</div>
+							</div>
+						))
+					)}
+				</div>
+				<AdminOffsetPagination
+					currentPage={cursorStack.length + 1}
+					nextDisabled={!nextCursor}
+					onNext={() => {
+						if (!nextCursor) return;
+						setCursorStack((current) => [...current, nextCursor]);
+					}}
+					onPageSizeChange={() => {}}
+					onPrevious={() => setCursorStack((current) => current.slice(0, -1))}
+					pageSize={String(EXTERNAL_AUTH_LINK_PAGE_SIZE)}
+					pageSizeOptions={[
+						{
+							label: t("admin.pagination.pageSizeOption", {
+								count: EXTERNAL_AUTH_LINK_PAGE_SIZE,
+							}),
+							value: String(EXTERNAL_AUTH_LINK_PAGE_SIZE),
+						},
+					]}
+					prevDisabled={cursorStack.length === 0}
+					total={linkTotal}
+					totalPages={Math.max(cursorStack.length + (nextCursor ? 2 : 1), 1)}
+				/>
+			</div>
+
+			<Dialog
+				open={deviceBinding !== null}
+				onOpenChange={(open) => {
+					if (!open) cancelDeviceBinding();
+				}}
+			>
+				<DialogContent className="sm:max-w-md">
+					{deviceBinding ? (
+						<>
+							<DialogHeader>
+								<DialogTitle>
+									{t("personalSettings.minecraftBindingDeviceTitle", {
+										provider: deviceBinding.providerDisplayName,
+									})}
+								</DialogTitle>
+								<DialogDescription>
+									{t("personalSettings.minecraftBindingDeviceDescription")}
+								</DialogDescription>
+							</DialogHeader>
+							<div className="grid gap-4">
+								<div className="rounded-md border border-border/70 bg-muted/45 p-4 text-center dark:border-white/10">
+									<div className="text-xs font-medium uppercase text-muted-foreground">
+										{t("personalSettings.minecraftBindingDeviceCodeLabel")}
+									</div>
+									<div className="mt-2 break-all font-mono text-2xl font-semibold tracking-normal">
+										{deviceBinding.userCode}
+									</div>
+								</div>
+								<div className="text-sm leading-6 text-muted-foreground">
+									{t("personalSettings.minecraftBindingDeviceExpires", {
+										minutes: Math.ceil(deviceBinding.expiresIn / 60),
+									})}
+								</div>
+								<div className="flex items-center gap-2 text-sm text-muted-foreground">
+									<Icon
+										name={devicePolling ? "Spinner" : "Clock"}
+										className={cn("size-4", devicePolling && "animate-spin")}
+									/>
+									{t("personalSettings.minecraftBindingDevicePending")}
+								</div>
+							</div>
+							<DialogFooter>
 								<Button
 									type="button"
-									size="sm"
 									variant="outline"
-									disabled={busyId === link.id || !link.allow_unlink}
-									onClick={() => void unlink(link)}
-									className={cn(
-										link.allow_unlink &&
-											"border-destructive/35 text-destructive hover:border-destructive/60 hover:bg-destructive/10 hover:text-destructive",
-									)}
+									onClick={cancelDeviceBinding}
 								>
-									<Icon
-										name={busyId === link.id ? "Spinner" : "Trash"}
-										className={cn(
-											"mr-2 size-4",
-											busyId === link.id && "animate-spin",
-										)}
-									/>
-									{t("personalSettings.externalAuthUnlink")}
+									{t("personalSettings.minecraftBindingDeviceCancel")}
 								</Button>
-							</div>
-						</div>
-					))
-				)}
-			</div>
-			<AdminOffsetPagination
-				currentPage={cursorStack.length + 1}
-				nextDisabled={!nextCursor}
-				onNext={() => {
-					if (!nextCursor) return;
-					setCursorStack((current) => [...current, nextCursor]);
-				}}
-				onPageSizeChange={() => {}}
-				onPrevious={() => setCursorStack((current) => current.slice(0, -1))}
-				pageSize={String(EXTERNAL_AUTH_LINK_PAGE_SIZE)}
-				pageSizeOptions={[
-					{
-						label: t("admin.pagination.pageSizeOption", {
-							count: EXTERNAL_AUTH_LINK_PAGE_SIZE,
-						}),
-						value: String(EXTERNAL_AUTH_LINK_PAGE_SIZE),
-					},
-				]}
-				prevDisabled={cursorStack.length === 0}
-				total={linkTotal}
-				totalPages={Math.max(cursorStack.length + (nextCursor ? 2 : 1), 1)}
-			/>
-		</div>
+								<Button
+									type="button"
+									onClick={() =>
+										window.open(
+											deviceBinding.verificationUri,
+											"_blank",
+											"noopener,noreferrer",
+										)
+									}
+								>
+									<Icon name="ArrowSquareOut" className="mr-2 size-4" />
+									{t("personalSettings.minecraftBindingDeviceOpen")}
+								</Button>
+							</DialogFooter>
+						</>
+					) : null}
+				</DialogContent>
+			</Dialog>
+		</>
 	);
 }
 

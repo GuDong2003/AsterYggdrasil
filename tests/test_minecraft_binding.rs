@@ -18,34 +18,31 @@ use std::sync::{Arc, Mutex};
 
 const TEST_CLIENT_ID: &str = "minecraft-binding-client";
 const TEST_CLIENT_SECRET: &str = "minecraft-binding-secret";
+const HMCL_CLIENT_ID: &str = "00000000402b5328";
+const TEST_DEVICE_CODE: &str = "mock-device-code";
+const TEST_USER_CODE: &str = "ABCD-EFGH";
 const TEST_MINECRAFT_UUID: &str = "069a79f444e94726a5befca90e38aaf5";
 const TEST_MINECRAFT_NAME: &str = "Notch";
 
 #[derive(Clone)]
 struct MockMicrosoftMinecraftProvider {
     base_url: String,
-    authorization_requests: Arc<Mutex<Vec<AuthorizeRequest>>>,
+    device_code_requests: Arc<Mutex<Vec<DeviceCodeRequest>>>,
+    device_token_requests: Arc<Mutex<Vec<DeviceTokenRequest>>>,
+    device_token_attempts: Arc<Mutex<usize>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct AuthorizeRequest {
-    response_type: String,
+struct DeviceCodeRequest {
     client_id: String,
-    redirect_uri: String,
     scope: String,
-    state: String,
-    code_challenge: String,
-    code_challenge_method: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct TokenRequest {
+#[derive(Clone, Debug, Deserialize)]
+struct DeviceTokenRequest {
     grant_type: String,
     client_id: String,
-    client_secret: Option<String>,
     code: String,
-    redirect_uri: String,
-    code_verifier: String,
 }
 
 async fn start_mock_microsoft_minecraft_provider()
@@ -56,13 +53,15 @@ async fn start_mock_microsoft_minecraft_provider()
         .expect("listener address should exist");
     let provider = MockMicrosoftMinecraftProvider {
         base_url: format!("http://127.0.0.1:{}", addr.port()),
-        authorization_requests: Arc::new(Mutex::new(Vec::new())),
+        device_code_requests: Arc::new(Mutex::new(Vec::new())),
+        device_token_requests: Arc::new(Mutex::new(Vec::new())),
+        device_token_attempts: Arc::new(Mutex::new(0)),
     };
     let app_provider = provider.clone();
     let server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(app_provider.clone()))
-            .route("/oauth2/v2.0/authorize", web::get().to(mock_authorize))
+            .route("/devicecode", web::post().to(mock_device_code))
             .route("/oauth2/v2.0/token", web::post().to(mock_token))
             .route("/user/authenticate", web::post().to(mock_xbox_live))
             .route("/xsts/authorize", web::post().to(mock_xsts))
@@ -81,52 +80,56 @@ async fn start_mock_microsoft_minecraft_provider()
     (provider, handle)
 }
 
-impl MockMicrosoftMinecraftProvider {
-    fn last_authorize_request(&self) -> AuthorizeRequest {
-        self.authorization_requests
-            .lock()
-            .expect("authorize requests lock should not be poisoned")
-            .last()
-            .expect("authorization request should be recorded")
-            .clone()
-    }
-}
-
-async fn mock_authorize(
+async fn mock_device_code(
     provider: web::Data<MockMicrosoftMinecraftProvider>,
-    query: web::Query<AuthorizeRequest>,
+    form: web::Form<DeviceCodeRequest>,
 ) -> impl Responder {
-    let request = query.into_inner();
-    assert_eq!(request.response_type, "code");
-    assert_eq!(request.client_id, TEST_CLIENT_ID);
-    assert!(
-        request
-            .redirect_uri
-            .ends_with("/api/v1/auth/external-auth/microsoft/ms-bind/binding/callback")
-    );
+    let request = form.into_inner();
+    assert_eq!(request.client_id, HMCL_CLIENT_ID);
     assert_eq!(request.scope, "XboxLive.signin offline_access");
-    assert_eq!(request.code_challenge_method, "S256");
-    assert!(!request.code_challenge.is_empty());
     provider
-        .authorization_requests
+        .device_code_requests
         .lock()
-        .expect("authorize requests lock should not be poisoned")
+        .expect("device code requests lock should not be poisoned")
         .push(request);
-    HttpResponse::Ok().finish()
+    HttpResponse::Ok().json(serde_json::json!({
+        "device_code": TEST_DEVICE_CODE,
+        "user_code": TEST_USER_CODE,
+        "verification_uri": "https://www.microsoft.com/link",
+        "expires_in": 900,
+        "interval": 1
+    }))
 }
 
-async fn mock_token(form: web::Form<TokenRequest>) -> impl Responder {
+async fn mock_token(
+    provider: web::Data<MockMicrosoftMinecraftProvider>,
+    form: web::Form<DeviceTokenRequest>,
+) -> impl Responder {
     let request = form.into_inner();
-    assert_eq!(request.grant_type, "authorization_code");
-    assert_eq!(request.client_id, TEST_CLIENT_ID);
-    assert_eq!(request.client_secret.as_deref(), Some(TEST_CLIENT_SECRET));
-    assert_eq!(request.code, "mock-code");
-    assert!(
-        request
-            .redirect_uri
-            .ends_with("/api/v1/auth/external-auth/microsoft/ms-bind/binding/callback")
+    assert_eq!(
+        request.grant_type,
+        "urn:ietf:params:oauth:grant-type:device_code"
     );
-    assert!(!request.code_verifier.is_empty());
+    assert_eq!(request.client_id, HMCL_CLIENT_ID);
+    assert_eq!(request.code, TEST_DEVICE_CODE);
+    provider
+        .device_token_requests
+        .lock()
+        .expect("device token requests lock should not be poisoned")
+        .push(request);
+
+    let mut attempts = provider
+        .device_token_attempts
+        .lock()
+        .expect("device token attempts lock should not be poisoned");
+    *attempts += 1;
+    if *attempts == 1 {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "authorization_pending",
+            "error_description": "Authorization is still pending."
+        }));
+    }
+
     HttpResponse::Ok().json(serde_json::json!({
         "access_token": "mock-microsoft-access-token",
         "token_type": "Bearer",
@@ -280,36 +283,47 @@ async fn microsoft_provider_with_login_disabled_can_bind_minecraft_profile() {
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), 200);
     let body: Value = test::read_body_json(resp).await;
-    let authorization_url = body["data"]["authorization_url"]
-        .as_str()
-        .expect("authorization URL should exist");
-    reqwest::Client::new()
-        .get(authorization_url)
-        .send()
-        .await
-        .expect("mock authorization request should succeed");
-    let state_value = mock_provider.last_authorize_request().state;
+    assert_eq!(
+        body["data"]["authorization_url"],
+        "https://www.microsoft.com/link"
+    );
+    assert_eq!(body["data"]["device_code"], TEST_DEVICE_CODE);
+    assert_eq!(body["data"]["user_code"], TEST_USER_CODE);
+    assert_eq!(
+        body["data"]["verification_uri"],
+        "https://www.microsoft.com/link"
+    );
+    assert_eq!(body["data"]["interval"], 1);
 
-    let callback = format!(
-        "/api/v1/auth/external-auth/microsoft/ms-bind/binding/callback?code=mock-code&state={}",
-        urlencoding::encode(&state_value)
-    );
-    let req = test::TestRequest::get().uri(&callback).to_request();
+    let req = test::TestRequest::post()
+        .uri("/api/v1/auth/external-auth/device-code/check")
+        .insert_header(("Cookie", common::access_cookie_header(&access_token)))
+        .insert_header(common::csrf_header_for(&access_token))
+        .set_json(serde_json::json!({
+            "device_code": TEST_DEVICE_CODE
+        }))
+        .to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), 302);
-    let location = resp
-        .headers()
-        .get("Location")
-        .and_then(|value| value.to_str().ok())
-        .expect("binding callback should redirect");
-    assert!(
-        location.starts_with(
-            "http://localhost:8080/account/settings?tab=profiles&minecraft_binding=success"
-        ),
-        "unexpected binding callback redirect location: {location}"
-    );
-    assert!(location.contains(&format!("profile_uuid={TEST_MINECRAFT_UUID}")));
-    assert!(location.contains("profile_created=true"));
+    assert_eq!(resp.status(), 200);
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["data"]["status"], "pending");
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/auth/external-auth/device-code/check")
+        .insert_header(("Cookie", common::access_cookie_header(&access_token)))
+        .insert_header(common::csrf_header_for(&access_token))
+        .set_json(serde_json::json!({
+            "device_code": TEST_DEVICE_CODE
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["data"]["status"], "completed");
+    assert_eq!(body["data"]["profile"]["uuid"], TEST_MINECRAFT_UUID);
+    assert_eq!(body["data"]["profile"]["name"], TEST_MINECRAFT_NAME);
+    assert_eq!(body["data"]["profile_created"], true);
+    assert_eq!(body["data"]["identity_linked"], true);
 
     let profile = minecraft_profile_repo::find_by_uuid(state.reader_db(), TEST_MINECRAFT_UUID)
         .await

@@ -25,8 +25,8 @@ use crate::types::{
 use aster_forge_api::NullablePatch;
 
 pub use binding::{
-    ExternalAuthMinecraftBindingCallbackResult, finish_minecraft_binding_callback,
-    start_minecraft_binding,
+    ExternalAuthMinecraftBindingCallbackResult, check_device_code_status,
+    finish_minecraft_binding_callback, start_minecraft_binding,
 };
 pub use links::{cleanup_expired_flows, delete_link, list_links, list_links_paginated};
 pub use login::{finish_callback, start_login};
@@ -87,6 +87,16 @@ pub struct ExternalAuthStartLoginRequest {
 #[cfg_attr(all(debug_assertions, feature = "openapi"), derive(utoipa::ToSchema))]
 pub struct ExternalAuthStartLoginResponse {
     pub authorization_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_in: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1218,9 +1218,18 @@ describe("externalAuthService", () => {
 				20,
 			),
 		);
-		apiMock.post.mockResolvedValueOnce({
-			authorization_url: "https://login.example.test/authorize",
-		});
+		apiMock.post
+			.mockResolvedValueOnce({
+				authorization_url: "https://www.microsoft.com/link",
+				device_code: "mock-device-code",
+				user_code: "ABCD-EFGH",
+				verification_uri: "https://www.microsoft.com/link",
+				expires_in: 900,
+				interval: 5,
+			})
+			.mockResolvedValueOnce({
+				status: "pending",
+			});
 		const { externalAuthService } = await import("./externalAuthService");
 
 		await expect(
@@ -1242,6 +1251,11 @@ describe("externalAuthService", () => {
 		await externalAuthService.startMinecraftBinding("microsoft", "ms-bind", {
 			return_path: "/account/settings",
 		});
+		await expect(
+			externalAuthService.checkMinecraftDeviceCode({
+				device_code: "mock-device-code",
+			}),
+		).resolves.toEqual({ status: "pending" });
 
 		expect(apiMock.get).toHaveBeenCalledWith(
 			"/auth/external-auth/microsoft/binding/providers?limit=20",
@@ -1250,6 +1264,10 @@ describe("externalAuthService", () => {
 		expect(apiMock.post).toHaveBeenCalledWith(
 			"/auth/external-auth/microsoft/ms-bind/binding/start",
 			{ return_path: "/account/settings" },
+		);
+		expect(apiMock.post).toHaveBeenCalledWith(
+			"/auth/external-auth/device-code/check",
+			{ device_code: "mock-device-code" },
 		);
 	});
 

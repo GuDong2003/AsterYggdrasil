@@ -26,6 +26,7 @@ const authServiceMock = vi.hoisted(() => ({
 }));
 
 const externalAuthServiceMock = vi.hoisted(() => ({
+	checkMinecraftDeviceCode: vi.fn(),
 	deleteLink: vi.fn(),
 	listLinksPage: vi.fn(),
 	listMinecraftBindingProvidersByKindPage: vi.fn(),
@@ -187,6 +188,9 @@ describe("AccountSettingsPage", () => {
 		);
 		externalAuthServiceMock.startMinecraftBinding.mockResolvedValue({
 			authorization_url: "https://login.example.test/authorize",
+		});
+		externalAuthServiceMock.checkMinecraftDeviceCode.mockResolvedValue({
+			status: "pending",
 		});
 	});
 
@@ -449,6 +453,33 @@ describe("AccountSettingsPage", () => {
 				return_path: "/account/settings",
 			}),
 		);
+	});
+
+	it("shows the Microsoft device code dialog for Minecraft binding", async () => {
+		externalAuthServiceMock.listMinecraftBindingProvidersByKindPage.mockResolvedValue(
+			microsoftBindingProviderPage,
+		);
+		externalAuthServiceMock.startMinecraftBinding.mockResolvedValue({
+			authorization_url: "https://www.microsoft.com/link",
+			device_code: "mock-device-code",
+			user_code: "ABCD-EFGH",
+			verification_uri: "https://www.microsoft.com/link",
+			expires_in: 900,
+			interval: 5,
+		});
+		renderPage();
+
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Bind Microsoft" }),
+		);
+
+		expect(await screen.findByText("ABCD-EFGH")).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Open verification page" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByText(/expires in about 15 minutes/i),
+		).toBeInTheDocument();
 	});
 
 	it("shows Microsoft Minecraft binding callback status", async () => {

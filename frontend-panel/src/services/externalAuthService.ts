@@ -28,6 +28,29 @@ type AuthExternalAuthMinecraftBindingProviderPath =
 type AuthExternalAuthKindPath =
 	OperationPath<"auth_external_auth_list_providers_by_kind">;
 
+export type MinecraftDeviceCodeStartResponse =
+	ExternalAuthStartLoginResponse & {
+		device_code?: string | null;
+		user_code?: string | null;
+		verification_uri?: string | null;
+		expires_in?: number | null;
+		interval?: number | null;
+	};
+
+export type MinecraftDeviceCodeCheckResponse = {
+	status: "completed" | "pending";
+	profile?: {
+		uuid: string;
+		name: string;
+	} | null;
+	profile_created?: boolean | null;
+	identity_linked?: boolean | null;
+};
+
+type MinecraftDeviceCodeCheckRequest = {
+	device_code: string;
+};
+
 type CachedRequestOptions = {
 	force?: boolean;
 	signal?: AbortSignal;
@@ -247,12 +270,17 @@ export const externalAuthService = {
 		data: ExternalAuthStartLoginRequest,
 	) =>
 		api.post<
-			ExternalAuthStartLoginResponse,
+			MinecraftDeviceCodeStartResponse,
 			OperationRequestBody<"auth_external_auth_start_minecraft_binding">
 		>(
 			`/auth/external-auth/${encodeURIComponent(kind)}/${encodeURIComponent(
 				provider,
 			)}/binding/start`,
+			data,
+		),
+	checkMinecraftDeviceCode: (data: MinecraftDeviceCodeCheckRequest) =>
+		api.post<MinecraftDeviceCodeCheckResponse, MinecraftDeviceCodeCheckRequest>(
+			"/auth/external-auth/device-code/check",
 			data,
 		),
 	finishAuthAlias: (

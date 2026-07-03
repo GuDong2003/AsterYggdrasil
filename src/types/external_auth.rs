@@ -222,18 +222,24 @@ impl Default for ExternalAuthProviderOptions {
 #[cfg_attr(all(debug_assertions, feature = "openapi"), derive(ToSchema))]
 pub struct MicrosoftExternalAuthProviderOptions {
     pub tenant: String,
+    #[serde(default)]
+    pub legacy: Option<bool>,
 }
 
 impl MicrosoftExternalAuthProviderOptions {
     pub fn new(tenant: impl Into<String>) -> Self {
         Self {
             tenant: tenant.into(),
+            legacy: None,
         }
     }
 
     fn normalized(self) -> Option<Self> {
         let tenant = self.tenant.trim().to_string();
-        (!tenant.is_empty()).then_some(Self { tenant })
+        (!tenant.is_empty()).then_some(Self {
+            tenant,
+            legacy: self.legacy,
+        })
     }
 }
 

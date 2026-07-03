@@ -25,6 +25,13 @@ use super::normalize::{normalize_key, normalize_return_path, state_hash};
 use super::{ExternalAuthCallbackQuery, ExternalAuthStartLoginResponse, FLOW_TTL_SECS};
 
 const MICROSOFT_LOGIN_BASE: &str = "https://login.microsoftonline.com";
+// HMCL 使用的旧 Live SDK 端点
+const LIVE_LOGIN_BASE: &str = "https://login.live.com";
+const LIVE_AUTHORIZE_URL: &str = "https://login.live.com/oauth20_authorize.srf";
+const LIVE_TOKEN_URL: &str = "https://login.live.com/oauth20_token.srf";
+// HMCL 的固定 Client ID（Minecraft 启动器常用）
+const HMCL_CLIENT_ID: &str = "00000000402b5328";
+
 const MICROSOFT_MINECRAFT_SCOPES: &str = "XboxLive.signin offline_access";
 const MINECRAFT_IDENTITY_NAMESPACE: &str = "https://api.minecraftservices.com/minecraft/profile";
 const XBOX_LIVE_AUTH_URL: &str = "https://user.auth.xboxlive.com/user/authenticate";
@@ -92,12 +99,28 @@ pub async fn start_minecraft_binding(
     let redirect_uri = binding_callback_redirect_uri(state, req, provider_kind, &provider.key)?;
     let endpoints = microsoft_oauth_endpoints(&provider)?;
     let configured_tenant = microsoft_provider_tenant(&provider)?;
+
+    // 检查是否使用 legacy 模式，如果是则使用 HMCL 的 Client ID
+    let options = parse_external_auth_provider_options(provider.options.as_ref());
+    let use_legacy = options
+        .microsoft
+        .as_ref()
+        .and_then(|m| m.legacy)
+        .unwrap_or(false);
+
+    let client_id = if use_legacy {
+        tracing::info!(provider_id = provider.id, "Using HMCL Client ID for legacy mode");
+        HMCL_CLIENT_ID.to_string()
+    } else {
+        provider.client_id.clone()
+    };
+
     let state_value = format!("msbind_{}", aster_forge_utils::id::new_short_token());
     let pkce_verifier = build_pkce_verifier();
     let pkce_challenge = build_pkce_challenge(&pkce_verifier);
     let authorization_url = build_authorization_url(
         &endpoints.authorization_url,
-        &provider.client_id,
+        &client_id,
         &redirect_uri,
         &state_value,
         &pkce_challenge,
@@ -311,22 +334,45 @@ fn build_authorization_url(
 fn microsoft_oauth_endpoints(
     provider: &external_auth_provider::Model,
 ) -> Result<MicrosoftOAuthEndpoints> {
-    let authorization_url = provider
+    // 如果 provider 配置了自定义端点，使用自定义端点
+    if let Some(authorization_url) = provider
         .authorization_url
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .map(Ok)
-        .unwrap_or_else(|| microsoft_oauth_endpoint_from_provider(provider, "authorize"))?;
-    let token_url = provider
-        .token_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .map(Ok)
-        .unwrap_or_else(|| microsoft_oauth_endpoint_from_provider(provider, "token"))?;
+    {
+        let token_url = provider
+            .token_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(LIVE_TOKEN_URL);
+        return Ok(MicrosoftOAuthEndpoints {
+            authorization_url: authorization_url.to_string(),
+            token_url: token_url.to_string(),
+        });
+    }
+
+    // 检查是否使用 legacy 模式（通过 options.microsoft.legacy 配置）
+    let options = parse_external_auth_provider_options(provider.options.as_ref());
+    let use_legacy = options
+        .microsoft
+        .as_ref()
+        .and_then(|m| m.legacy)
+        .unwrap_or(false);
+
+    if use_legacy {
+        // 使用 HMCL 的旧端点
+        tracing::info!("Using legacy Live SDK endpoints for Microsoft authentication");
+        return Ok(MicrosoftOAuthEndpoints {
+            authorization_url: LIVE_AUTHORIZE_URL.to_string(),
+            token_url: LIVE_TOKEN_URL.to_string(),
+        });
+    }
+
+    // 默认使用新的 v2.0 端点
+    let authorization_url = microsoft_oauth_endpoint_from_provider(provider, "authorize")?;
+    let token_url = microsoft_oauth_endpoint_from_provider(provider, "token")?;
     parse_http_url(&authorization_url, "Microsoft authorization_url")?;
     parse_http_url(&token_url, "Microsoft token_url")?;
     Ok(MicrosoftOAuthEndpoints {
@@ -460,9 +506,23 @@ async fn exchange_microsoft_code_for_token(
     redirect_uri: &str,
     pkce_verifier: &str,
 ) -> Result<MicrosoftOAuthTokenResponse> {
+    // 检查是否使用 legacy 模式
+    let options = parse_external_auth_provider_options(provider.options.as_ref());
+    let use_legacy = options
+        .microsoft
+        .as_ref()
+        .and_then(|m| m.legacy)
+        .unwrap_or(false);
+
+    let client_id = if use_legacy {
+        HMCL_CLIENT_ID.to_string()
+    } else {
+        provider.client_id.clone()
+    };
+
     let mut form = vec![
         ("grant_type", "authorization_code".to_string()),
-        ("client_id", provider.client_id.clone()),
+        ("client_id", client_id),
         ("code", code.to_string()),
         ("redirect_uri", redirect_uri.to_string()),
         ("code_verifier", pkce_verifier.to_string()),
@@ -473,7 +533,10 @@ async fn exchange_microsoft_code_for_token(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        form.push(("client_secret", client_secret.to_string()));
+        // legacy 模式下不使用 client_secret
+        if !use_legacy {
+            form.push(("client_secret", client_secret.to_string()));
+        }
     }
     let response = http_client
         .post(token_url)

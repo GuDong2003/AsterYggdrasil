@@ -1263,6 +1263,14 @@ pub fn system_config_model(key: &str, value: &str) -> aster_forge_db::system_con
     }
 }
 
+#[allow(dead_code)]
+pub fn disable_registration_activation(state: &AppState) {
+    state.runtime_config.apply(system_config_model(
+        aster_yggdrasil::config::auth_runtime::AUTH_REGISTER_ACTIVATION_ENABLED_KEY,
+        "false",
+    ));
+}
+
 #[macro_export]
 macro_rules! create_test_app {
     ($state:expr) => {{

@@ -117,10 +117,10 @@ describe("audit i18n helpers", () => {
 		expect(formatAuditEntityType(en, "passkey")).toBe("Passkey");
 		expect(formatAuditEntityType(en, "invitation")).toBe("Invitation");
 
-		expect(formatAuditAction(zh, "user_passkey_login")).toBe("Passkey 登录");
-		expect(formatAuditAction(zh, "user_passkey_register")).toBe("注册 Passkey");
+		expect(formatAuditAction(zh, "user_passkey_login")).toBe("通行密钥登录");
+		expect(formatAuditAction(zh, "user_passkey_register")).toBe("注册通行密钥");
 		expect(formatAuditAction(zh, "admin_create_invitation")).toBe("创建邀请");
-		expect(formatAuditEntityType(zh, "passkey")).toBe("Passkey");
+		expect(formatAuditEntityType(zh, "passkey")).toBe("通行密钥");
 		expect(formatAuditEntityType(zh, "invitation")).toBe("邀请");
 	});
 
@@ -172,7 +172,7 @@ describe("audit i18n helpers", () => {
 		expect(formatAuditSummary(t, entry)).toBe("重命名 Minecraft 角色档案");
 		expect(formatAuditTarget(t, entry)).toBe("RenameNew · Minecraft 角色档案");
 		expect(formatAuditDetail(t, entry)).toBe(
-			"已将 RenameOld 改名为 RenameNew，临时失效 1 个 token",
+			"已将 RenameOld 改名为 RenameNew，临时失效 1 个令牌",
 		);
 	});
 

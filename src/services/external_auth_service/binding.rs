@@ -108,12 +108,10 @@ async fn find_minecraft_binding_provider(
         let providers =
             external_auth_provider_repo::find_enabled_by_kind(state.writer_db(), provider_kind)
                 .await?;
-        return match providers.len() {
-            1 => Ok(providers
-                .into_iter()
-                .next()
-                .expect("single provider should exist")),
-            0 => Err(AsterError::record_not_found(format!(
+        let mut providers = providers.into_iter();
+        return match (providers.next(), providers.next()) {
+            (Some(provider), None) => Ok(provider),
+            (None, _) => Err(AsterError::record_not_found(format!(
                 "external auth provider '{}:{provider_key}'",
                 provider_kind.as_str()
             ))),
@@ -189,7 +187,7 @@ async fn start_device_code_flow(
 
     // 保存设备代码流信息到数据库
     let now = Utc::now();
-    let ttl_secs = expires_in.min(900).max(1);
+    let ttl_secs = expires_in.clamp(1, 900);
     let ttl = u64_to_i64(ttl_secs, "external auth device code flow ttl")?;
     let flow = external_auth_binding_flow::ActiveModel {
         user_id: Set(user_id),

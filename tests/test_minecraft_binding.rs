@@ -234,6 +234,7 @@ fn microsoft_binding_provider_model(base_url: &str) -> external_auth_provider::A
 async fn microsoft_provider_with_login_disabled_can_bind_minecraft_profile() {
     let (mock_provider, server) = start_mock_microsoft_minecraft_provider().await;
     let state = common::setup().await;
+    common::disable_registration_activation(&state);
     state.runtime_config.apply(common::system_config_model(
         aster_yggdrasil::config::site_url::PUBLIC_SITE_URL_KEY,
         r#"["http://localhost:8080"]"#,

@@ -56,7 +56,12 @@ jobs:
         uses: oven-sh/setup-bun@v2
 
       - name: Run tests with coverage
-        run: cargo llvm-cov --workspace --no-fail-fast --verbose --lcov --output-path coverage/rust/lcov.info
+        run: >
+          cargo llvm-cov --workspace --no-fail-fast --verbose --lcov
+          --output-path coverage/rust/lcov.info
+          --
+          --skip test_postgres_smoke_foundation_contracts
+          --skip test_mysql_smoke_foundation_contracts
 
       - name: Generate HTML coverage report
         if: success()

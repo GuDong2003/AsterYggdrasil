@@ -9,6 +9,7 @@ use serde_json::Value;
 #[actix_web::test]
 async fn admin_overview_route_is_admin_only() {
     let state = common::setup().await;
+    common::disable_registration_activation(&state);
     let app = create_test_app!(state);
     let admin_token = setup_admin!(app);
     let user_token = register_user!(

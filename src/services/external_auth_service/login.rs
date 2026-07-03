@@ -134,12 +134,10 @@ async fn find_login_provider(
         let providers =
             external_auth_provider_repo::find_enabled_by_kind(state.writer_db(), provider_kind)
                 .await?;
-        return match providers.len() {
-            1 => Ok(providers
-                .into_iter()
-                .next()
-                .expect("single provider should exist")),
-            0 => Err(AsterError::record_not_found(format!(
+        let mut providers = providers.into_iter();
+        return match (providers.next(), providers.next()) {
+            (Some(provider), None) => Ok(provider),
+            (None, _) => Err(AsterError::record_not_found(format!(
                 "external auth provider '{}:{provider_key}'",
                 provider_kind.as_str()
             ))),
@@ -303,27 +301,27 @@ pub async fn finish_callback(
     );
 
     // LinuxDo trust_level gate: reject users below the configured minimum.
-    if provider.provider_kind == ExternalAuthProviderKind::LinuxDo {
-        if let Some(linuxdo_opts) = &provider_options.linuxdo {
-            let user_trust_level = linuxdo_metadata.as_ref().and_then(|m| {
-                serde_json::from_str::<serde_json::Value>(m)
-                    .ok()
-                    .and_then(|v| v.get("linuxdo_trust_level")?.as_i64())
-            });
-            let min_trust_level = linuxdo_opts.min_trust_level;
-            if let Some(level) = user_trust_level {
-                if level < i64::from(min_trust_level) {
-                    tracing::debug!(
-                        provider_id = provider.id,
-                        user_trust_level = level,
-                        min_trust_level = min_trust_level,
-                        "LinuxDo callback rejected: trust level below minimum"
-                    );
-                    return Err(AsterError::auth_forbidden(
-                        "LinuxDO trust level below minimum requirement",
-                    ));
-                }
-            }
+    if provider.provider_kind == ExternalAuthProviderKind::LinuxDo
+        && let Some(linuxdo_opts) = &provider_options.linuxdo
+    {
+        let user_trust_level = linuxdo_metadata.as_ref().and_then(|m| {
+            serde_json::from_str::<serde_json::Value>(m)
+                .ok()
+                .and_then(|v| v.get("linuxdo_trust_level")?.as_i64())
+        });
+        let min_trust_level = linuxdo_opts.min_trust_level;
+        if let Some(level) = user_trust_level
+            && level < i64::from(min_trust_level)
+        {
+            tracing::debug!(
+                provider_id = provider.id,
+                user_trust_level = level,
+                min_trust_level = min_trust_level,
+                "LinuxDo callback rejected: trust level below minimum"
+            );
+            return Err(AsterError::auth_forbidden(
+                "LinuxDO trust level below minimum requirement",
+            ));
         }
     }
 
@@ -525,6 +523,18 @@ struct LinuxDoTokenResponse {
     access_token: String,
 }
 
+#[derive(Clone, Copy)]
+struct LinuxDoTokenRequest<'a> {
+    http_client: &'a reqwest::Client,
+    token_url: &'a str,
+    client_id: &'a str,
+    client_secret: &'a str,
+    code: &'a str,
+    redirect_uri: &'a str,
+    pkce_verifier: Option<&'a str>,
+    auth_method: LinuxDoTokenAuthMethod,
+}
+
 /// LinuxDo-specific code exchange and userinfo fetch.
 ///
 /// LinuxDo does not return email, so the email field will be None.
@@ -543,16 +553,16 @@ pub(super) async fn exchange_linuxdo_callback(
         .build()
         .map_err(|err| AsterError::internal_error(format!("failed to build HTTP client: {err}")))?;
 
-    let token_data = request_linuxdo_token(
-        &http_client,
+    let token_data = request_linuxdo_token(LinuxDoTokenRequest {
+        http_client: &http_client,
         token_url,
         client_id,
         client_secret,
         code,
         redirect_uri,
         pkce_verifier,
-        LinuxDoTokenAuthMethod::Basic,
-    )
+        auth_method: LinuxDoTokenAuthMethod::Basic,
+    })
     .await?;
 
     // Fetch userinfo
@@ -628,40 +638,37 @@ pub(super) fn linuxdo_trust_level_metadata(trust_level: Option<i32>) -> Option<S
 }
 
 async fn request_linuxdo_token(
-    http_client: &reqwest::Client,
-    token_url: &str,
-    client_id: &str,
-    client_secret: &str,
-    code: &str,
-    redirect_uri: &str,
-    pkce_verifier: Option<&str>,
-    auth_method: LinuxDoTokenAuthMethod,
+    token_request: LinuxDoTokenRequest<'_>,
 ) -> Result<LinuxDoTokenResponse> {
     let mut form = vec![
         ("grant_type", "authorization_code".to_string()),
-        ("code", code.to_string()),
-        ("redirect_uri", redirect_uri.to_string()),
+        ("code", token_request.code.to_string()),
+        ("redirect_uri", token_request.redirect_uri.to_string()),
     ];
-    if let Some(verifier) = pkce_verifier {
+    if let Some(verifier) = token_request.pkce_verifier {
         form.push(("code_verifier", verifier.to_string()));
     }
 
     let mut authorization = None;
-    match auth_method {
+    match token_request.auth_method {
         LinuxDoTokenAuthMethod::Basic => {
-            let credentials = format!("{client_id}:{client_secret}");
+            let credentials = format!(
+                "{}:{}",
+                token_request.client_id, token_request.client_secret
+            );
             let basic_auth =
                 base64::engine::general_purpose::STANDARD.encode(credentials.as_bytes());
             authorization = Some(format!("Basic {basic_auth}"));
         }
         LinuxDoTokenAuthMethod::ClientSecretPost => {
-            form.push(("client_id", client_id.to_string()));
-            form.push(("client_secret", client_secret.to_string()));
+            form.push(("client_id", token_request.client_id.to_string()));
+            form.push(("client_secret", token_request.client_secret.to_string()));
         }
     }
 
-    let mut request = http_client
-        .post(token_url)
+    let mut request = token_request
+        .http_client
+        .post(token_request.token_url)
         .header("Accept", "application/json")
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(linuxdo_form_body(&form));
@@ -683,25 +690,19 @@ async fn request_linuxdo_token(
     let body = token_response.text().await.unwrap_or_default();
     tracing::warn!(
         status = %status,
-        auth_method = ?auth_method,
+        auth_method = ?token_request.auth_method,
         body = %body,
         "LinuxDo token exchange returned non-success status"
     );
 
-    if auth_method == LinuxDoTokenAuthMethod::Basic
+    if token_request.auth_method == LinuxDoTokenAuthMethod::Basic
         && linuxdo_should_retry_client_secret_post(status, &body)
     {
         tracing::debug!("retrying LinuxDo token exchange with client_secret_post");
-        return Box::pin(request_linuxdo_token(
-            http_client,
-            token_url,
-            client_id,
-            client_secret,
-            code,
-            redirect_uri,
-            pkce_verifier,
-            LinuxDoTokenAuthMethod::ClientSecretPost,
-        ))
+        return Box::pin(request_linuxdo_token(LinuxDoTokenRequest {
+            auth_method: LinuxDoTokenAuthMethod::ClientSecretPost,
+            ..token_request
+        }))
         .await;
     }
 

@@ -148,6 +148,7 @@ fn json_i64_values(items: &[Value], key: &str) -> Vec<i64> {
 #[actix_web::test]
 async fn admin_task_routes_are_admin_only() {
     let state = common::setup().await;
+    common::disable_registration_activation(&state);
     let app = create_test_app!(state);
     let admin_token = setup_admin!(app);
     let user_token = register_user!(
@@ -178,6 +179,7 @@ async fn admin_task_routes_are_admin_only() {
 #[actix_web::test]
 async fn admin_can_list_retry_and_cleanup_tasks() {
     let state = common::setup().await;
+    common::disable_registration_activation(&state);
     let state_for_insert = state.clone();
     let app = create_test_app!(state);
     let token = setup_admin!(app);

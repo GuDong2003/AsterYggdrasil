@@ -242,6 +242,7 @@ pub fn microsoft_external_auth_provider_model(
     issuer_url: &str,
     enabled: bool,
 ) -> external_auth_provider::ActiveModel {
+    let scopes = "openid XboxLive.signin offline_access";
     external_auth_provider::ActiveModel {
         provider_kind: Set(
             aster_yggdrasil::types::external_auth::ExternalAuthProviderKind::Microsoft,
@@ -249,14 +250,14 @@ pub fn microsoft_external_auth_provider_model(
         options: Set(
             aster_yggdrasil::types::external_auth::StoredExternalAuthProviderOptions::empty(),
         ),
-        scopes: Set("openid profile email".to_string()),
+        scopes: Set(scopes.to_string()),
         require_email_verified: Set(false),
         subject_claim: Set(Some("sub".to_string())),
         display_name_claim: Set(Some("name".to_string())),
         email_claim: Set(Some("email".to_string())),
         email_verified_claim: Set(None),
         avatar_url_claim: Set(None),
-        ..oidc_external_auth_provider_model(key, issuer_url, enabled, "openid profile email")
+        ..oidc_external_auth_provider_model(key, issuer_url, enabled, scopes)
     }
 }
 

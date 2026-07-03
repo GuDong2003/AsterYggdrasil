@@ -99,9 +99,29 @@ where
     C: sea_orm::ConnectionTrait,
 {
     create_profile_with_uuid_in_connection_inner(
-        state, db, user_id, user_role, uuid, name, source, false, false,
+        state,
+        db,
+        CreateProfileInput {
+            user_id,
+            user_role,
+            uuid,
+            name,
+            source,
+            allow_reserved_linuxdo_name: false,
+            check_mojang_name: false,
+        },
     )
     .await
+}
+
+struct CreateProfileInput<'a> {
+    user_id: i64,
+    user_role: crate::types::user::UserRole,
+    uuid: &'a str,
+    name: &'a str,
+    source: MinecraftProfileSource,
+    allow_reserved_linuxdo_name: bool,
+    check_mojang_name: bool,
 }
 
 async fn create_profile_inner<S>(
@@ -118,13 +138,15 @@ where
     create_profile_with_uuid_in_connection_inner(
         state,
         state.writer_db(),
-        user_id,
-        user_role,
-        &uuid,
-        name,
-        MinecraftProfileSource::Local,
-        allow_reserved_linuxdo_name,
-        true,
+        CreateProfileInput {
+            user_id,
+            user_role,
+            uuid: &uuid,
+            name,
+            source: MinecraftProfileSource::Local,
+            allow_reserved_linuxdo_name,
+            check_mojang_name: true,
+        },
     )
     .await
 }
@@ -132,18 +154,21 @@ where
 async fn create_profile_with_uuid_in_connection_inner<S, C>(
     state: &S,
     db: &C,
-    user_id: i64,
-    user_role: crate::types::user::UserRole,
-    uuid: &str,
-    name: &str,
-    source: MinecraftProfileSource,
-    allow_reserved_linuxdo_name: bool,
-    check_mojang_name: bool,
+    input: CreateProfileInput<'_>,
 ) -> Result<minecraft_profile::Model>
 where
     S: DatabaseRuntimeState + RuntimeConfigRuntimeState,
     C: sea_orm::ConnectionTrait,
 {
+    let CreateProfileInput {
+        user_id,
+        user_role,
+        uuid,
+        name,
+        source,
+        allow_reserved_linuxdo_name,
+        check_mojang_name,
+    } = input;
     tracing::debug!(user_id, name_len = name.len(), "creating minecraft profile");
     ensure_profile_creation_not_banned(db, user_id).await?;
     let policy = RuntimeYggdrasilPolicy::from_runtime_config(state.runtime_config());
@@ -511,9 +536,7 @@ fn sanitize_external_username(username: &str) -> Option<String> {
         .filter_map(|c| {
             if c.is_ascii_alphanumeric() {
                 Some(c)
-            } else if c == '_' {
-                Some('_')
-            } else if c == '-' || c == '.' || c == ' ' {
+            } else if matches!(c, '_' | '-' | '.' | ' ') {
                 Some('_')
             } else {
                 None
@@ -601,9 +624,11 @@ where
         }
     }
 
-    let (profile_name, allow_reserved_linuxdo_name) = profile_names
-        .last()
-        .expect("profile_names is checked to be non-empty");
+    let Some((profile_name, allow_reserved_linuxdo_name)) = profile_names.last() else {
+        return Err(AsterError::validation_error(
+            "external username cannot be converted to a valid profile name",
+        ));
+    };
     let mut candidate = profile_name.clone();
     for suffix in 1..=99u32 {
         let suffix = suffix.to_string();

@@ -238,6 +238,7 @@ async fn audit_log_persists_external_auth_provider_entry() {
 #[actix_web::test]
 async fn admin_audit_logs_are_admin_only() {
     let state = common::setup().await;
+    common::disable_registration_activation(&state);
     let app = create_test_app!(state);
     let _admin_token = setup_admin!(app);
     let user_token = register_user!(app, "audit-user", "audit-user@example.com", "password1234");
@@ -257,6 +258,7 @@ async fn admin_audit_logs_are_admin_only() {
 #[actix_web::test]
 async fn account_audit_logs_are_limited_to_current_user() {
     let state = common::setup().await;
+    common::disable_registration_activation(&state);
     let app = create_test_app!(state);
     let _admin_token = setup_admin!(app);
     let alice_token = register_user!(
@@ -311,6 +313,7 @@ async fn account_audit_logs_are_limited_to_current_user() {
 #[actix_web::test]
 async fn account_audit_logs_clamp_limit_and_apply_offset() {
     let state = common::setup().await;
+    common::disable_registration_activation(&state);
     let state_for_insert = state.clone();
     let app = create_test_app!(state);
     let _admin_token = setup_admin!(app);
@@ -380,6 +383,7 @@ async fn account_audit_logs_clamp_limit_and_apply_offset() {
 #[actix_web::test]
 async fn account_audit_logs_filter_by_rfc3339_bounds_and_entity_fields() {
     let state = common::setup().await;
+    common::disable_registration_activation(&state);
     let state_for_insert = state.clone();
     let app = create_test_app!(state);
     let _admin_token = setup_admin!(app);
@@ -478,6 +482,7 @@ async fn account_audit_logs_filter_by_rfc3339_bounds_and_entity_fields() {
 #[actix_web::test]
 async fn account_audit_logs_accept_admin_shape_sort_query() {
     let state = common::setup().await;
+    common::disable_registration_activation(&state);
     let state_for_insert = state.clone();
     let app = create_test_app!(state);
     let _admin_token = setup_admin!(app);
@@ -565,6 +570,7 @@ async fn account_audit_logs_accept_admin_shape_sort_query() {
 #[actix_web::test]
 async fn account_overview_returns_recent_current_user_activity() {
     let state = common::setup().await;
+    common::disable_registration_activation(&state);
     // Allow 2 profiles per user so the test can create two profiles.
     state.runtime_config.apply(common::system_config_model(
         aster_yggdrasil::config::definitions::YGGDRASIL_MAX_PROFILES_PER_USER_KEY,
@@ -617,6 +623,7 @@ async fn account_overview_returns_recent_current_user_activity() {
 #[actix_web::test]
 async fn account_overview_returns_latest_five_current_user_activities() {
     let state = common::setup().await;
+    common::disable_registration_activation(&state);
     let state_for_insert = state.clone();
     let app = create_test_app!(state);
     let _admin_token = setup_admin!(app);

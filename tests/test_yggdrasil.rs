@@ -115,12 +115,14 @@ impl ObjectStorage for FailingObjectStorage {
 
 async fn setup_yggdrasil() -> aster_yggdrasil::runtime::AppState {
     let state = common::setup().await;
+    common::disable_registration_activation(&state);
     configure_yggdrasil_public_site_url(&state).await;
     state
 }
 
 async fn setup_yggdrasil_with_memory_cache() -> aster_yggdrasil::runtime::AppState {
     let state = common::setup_with_memory_cache().await;
+    common::disable_registration_activation(&state);
     configure_yggdrasil_public_site_url(&state).await;
     state
 }

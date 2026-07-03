@@ -363,7 +363,10 @@ async fn admin_create_and_test_microsoft_provider_uses_oidc_defaults() {
     assert_eq!(body["data"]["authorization_url"], Value::Null);
     assert_eq!(body["data"]["token_url"], Value::Null);
     assert_eq!(body["data"]["userinfo_url"], Value::Null);
-    assert_eq!(body["data"]["scopes"], "openid profile email");
+    assert_eq!(
+        body["data"]["scopes"],
+        "openid XboxLive.signin offline_access"
+    );
     assert_eq!(body["data"]["require_email_verified"], false);
 
     let req = test::TestRequest::post()
@@ -1045,18 +1048,23 @@ async fn microsoft_callback_missing_email_uses_local_email_verification_flow() {
     let authorize_request = mock_provider.last_authorize_request();
     assert_eq!(
         authorize_request.redirect_uri,
-        format!(
-            "http://localhost:8080/api/v1/auth/external-auth/microsoft/{}/callback",
-            provider.key
-        )
+        "http://localhost:8080/api/v1/auth/external-auth/microsoft/microsoft/callback"
     );
     let scope = authorize_request
         .scope
         .as_deref()
         .expect("Microsoft OIDC authorization request should include scopes");
     assert!(scope.split_whitespace().any(|item| item == "openid"));
-    assert!(scope.split_whitespace().any(|item| item == "profile"));
-    assert!(scope.split_whitespace().any(|item| item == "email"));
+    assert!(
+        scope
+            .split_whitespace()
+            .any(|item| item == "XboxLive.signin")
+    );
+    assert!(
+        scope
+            .split_whitespace()
+            .any(|item| item == "offline_access")
+    );
 
     let resp = finish_microsoft_callback(&app, &provider.key, &state_value).await;
     let flow_token = oidc_email_required_flow(&resp);

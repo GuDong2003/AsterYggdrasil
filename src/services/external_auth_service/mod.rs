@@ -51,10 +51,10 @@ const EXTERNAL_AUTH_URL_MAX_LEN: usize = 2048;
 const USERNAME_MAX_LEN: usize = 16;
 const USERNAME_MIN_LEN: usize = 4;
 
-pub(super) fn public_provider_key<'a>(
+pub(super) fn public_provider_key(
     provider_kind: ExternalAuthProviderKind,
-    stored_key: &'a str,
-) -> &'a str {
+    stored_key: &str,
+) -> &str {
     if provider_kind == ExternalAuthProviderKind::Microsoft {
         MICROSOFT_PROVIDER_PUBLIC_KEY
     } else {

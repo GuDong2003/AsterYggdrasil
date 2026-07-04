@@ -1255,8 +1255,8 @@ async fn sync_official_minecraft_textures(
     profile: &crate::entities::minecraft_profile::Model,
     account: &MicrosoftMinecraftAccount,
 ) {
-    if let Some(texture) = account.official_textures.skin.as_ref() {
-        if let Err(error) = crate::services::texture_service::import_official_texture_to_profile(
+    if let Some(texture) = account.official_textures.skin.as_ref()
+        && let Err(error) = crate::services::texture_service::import_official_texture_to_profile(
             state,
             profile,
             MinecraftTextureType::Skin,
@@ -1264,19 +1264,18 @@ async fn sync_official_minecraft_textures(
             &texture.url,
         )
         .await
-        {
-            tracing::warn!(
-                error = ?error,
-                profile_id = profile.id,
-                profile_uuid = %profile.uuid,
-                texture_type = MinecraftTextureType::Skin.as_str(),
-                "failed to sync official Minecraft profile texture"
-            );
-        }
+    {
+        tracing::warn!(
+            error = ?error,
+            profile_id = profile.id,
+            profile_uuid = %profile.uuid,
+            texture_type = MinecraftTextureType::Skin.as_str(),
+            "failed to sync official Minecraft profile texture"
+        );
     }
 
-    if let Some(texture) = account.official_textures.cape.as_ref() {
-        if let Err(error) = crate::services::texture_service::import_official_texture_to_profile(
+    if let Some(texture) = account.official_textures.cape.as_ref()
+        && let Err(error) = crate::services::texture_service::import_official_texture_to_profile(
             state,
             profile,
             MinecraftTextureType::Cape,
@@ -1284,15 +1283,14 @@ async fn sync_official_minecraft_textures(
             &texture.url,
         )
         .await
-        {
-            tracing::warn!(
-                error = ?error,
-                profile_id = profile.id,
-                profile_uuid = %profile.uuid,
-                texture_type = MinecraftTextureType::Cape.as_str(),
-                "failed to sync official Minecraft profile texture"
-            );
-        }
+    {
+        tracing::warn!(
+            error = ?error,
+            profile_id = profile.id,
+            profile_uuid = %profile.uuid,
+            texture_type = MinecraftTextureType::Cape.as_str(),
+            "failed to sync official Minecraft profile texture"
+        );
     }
 }
 

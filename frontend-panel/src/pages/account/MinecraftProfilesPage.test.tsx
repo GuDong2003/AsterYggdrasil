@@ -27,6 +27,7 @@ const yggdrasilServiceMock = vi.hoisted(() => ({
 	listProfileSkinTextureUrls: vi.fn(),
 	listProfileTextures: vi.fn(),
 	listProfiles: vi.fn(),
+	refreshOfficialProfileTextures: vi.fn(),
 	renameProfile: vi.fn(),
 	unbindProfileTexture: vi.fn(),
 	uploadWardrobeTexture: vi.fn(),
@@ -269,6 +270,7 @@ describe("MinecraftProfilesPage", () => {
 		);
 		yggdrasilServiceMock.bindProfileTexture.mockResolvedValue(texture());
 		yggdrasilServiceMock.unbindProfileTexture.mockResolvedValue(undefined);
+		yggdrasilServiceMock.refreshOfficialProfileTextures.mockResolvedValue([]);
 	});
 
 	it("loads the first page with default page size 5 and selects the first profile", async () => {
@@ -299,7 +301,7 @@ describe("MinecraftProfilesPage", () => {
 		).toBeInTheDocument();
 	});
 
-	it("marks official Microsoft profiles and disables local rename", async () => {
+	it("marks official Microsoft profiles and only exposes official texture refresh", async () => {
 		yggdrasilServiceMock.listProfiles.mockResolvedValueOnce(
 			cursorPage([
 				profile("official-profile", "Notch", { source: "microsoft" }),
@@ -310,21 +312,49 @@ describe("MinecraftProfilesPage", () => {
 			"local-profile": null,
 			"official-profile": null,
 		});
+		yggdrasilServiceMock.refreshOfficialProfileTextures.mockResolvedValueOnce([
+			texture({ profile_uuid: "official-profile", url: "/textures/notch.png" }),
+		]);
 
 		render(<MinecraftProfilesPage />);
-		await screen.findByTestId("profile-rename-action-official-profile");
+		await screen.findByTestId(
+			"profile-refresh-official-textures-action-official-profile",
+		);
 
 		const officialRow = rowFor("Notch");
 		expect(
 			within(officialRow).getByText("profiles.sourceMicrosoft"),
 		).toBeVisible();
 		expect(
-			within(officialRow).getByTestId("profile-rename-action-official-profile"),
-		).toBeDisabled();
-		expect(screen.getByText("profiles.officialRenameDisabled")).toHaveAttribute(
-			"role",
-			"tooltip",
+			within(officialRow).queryByTestId(
+				"profile-textures-action-official-profile",
+			),
+		).not.toBeInTheDocument();
+		expect(
+			within(officialRow).queryByTestId(
+				"profile-rename-action-official-profile",
+			),
+		).not.toBeInTheDocument();
+		expect(
+			within(officialRow).queryByTestId(
+				"profile-delete-action-official-profile",
+			),
+		).not.toBeInTheDocument();
+		fireEvent.click(
+			within(officialRow).getByTestId(
+				"profile-refresh-official-textures-action-official-profile",
+			),
 		);
+		await waitFor(() => {
+			expect(
+				yggdrasilServiceMock.refreshOfficialProfileTextures,
+			).toHaveBeenCalledWith("official-profile");
+		});
+		await waitFor(() => {
+			expect(toastMock.success).toHaveBeenCalledWith(
+				"profiles.officialTextureRefreshSuccess",
+			);
+		});
 
 		const localRow = rowFor("LocalName");
 		expect(within(localRow).getByText("profiles.sourceLocal")).toBeVisible();

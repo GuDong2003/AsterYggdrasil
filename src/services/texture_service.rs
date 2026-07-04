@@ -57,13 +57,16 @@ use crate::runtime::{
 };
 use crate::services::ban_service;
 use crate::types::{
-    user::UserBanScope, yggdrasil::MinecraftTextureLibraryStatus, yggdrasil::MinecraftTextureModel,
+    user::UserBanScope, yggdrasil::MinecraftProfileSource,
+    yggdrasil::MinecraftTextureLibraryStatus, yggdrasil::MinecraftTextureModel,
     yggdrasil::MinecraftTextureReportReason, yggdrasil::MinecraftTextureReportStatus,
     yggdrasil::MinecraftTextureType, yggdrasil::MinecraftTextureVisibility,
 };
+use crate::utils::OUTBOUND_HTTP_USER_AGENT;
 use aster_forge_api::{CursorPage, DateTimeIdCursor, NullablePatch, SortOrderNameIdCursor};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
+use reqwest::Url;
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -72,6 +75,7 @@ use tokio::io::AsyncWriteExt;
 use self::maintenance::cleanup_texture_blob_if_unreferenced;
 
 const PNG_CONTENT_TYPE: &str = "image/png";
+const OFFICIAL_TEXTURE_DOWNLOAD_TIMEOUT_SECS: u64 = 10;
 pub(crate) const TEXTURE_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 
 pub fn parse_texture_type(value: &str) -> std::result::Result<MinecraftTextureType, TextureError> {
@@ -1370,6 +1374,7 @@ where
         texture_model = ?texture_model,
         "storing profile texture"
     );
+    ensure_profile_texture_mutation_allowed(profile)?;
     ensure_upload_allowed(profile, texture_type)?;
     let wardrobe_texture = store_or_reuse_wardrobe_texture(
         state,
@@ -1433,6 +1438,245 @@ where
         profile: profile.clone(),
         wardrobe_texture,
     })
+}
+
+pub async fn import_official_texture_to_profile<S>(
+    state: &S,
+    profile: &minecraft_profile::Model,
+    texture_type: MinecraftTextureType,
+    texture_model: MinecraftTextureModel,
+    source_url: &str,
+) -> std::result::Result<StoredTexture, TextureError>
+where
+    S: CacheRuntimeState
+        + DatabaseRuntimeState
+        + RuntimeConfigRuntimeState
+        + ObjectStorageRuntimeState,
+{
+    tracing::debug!(
+        profile_id = profile.id,
+        profile_uuid = %profile.uuid,
+        user_id = profile.user_id,
+        texture_type = ?texture_type,
+        texture_model = ?texture_model,
+        "importing official Minecraft profile texture"
+    );
+    let policy = crate::config::yggdrasil::RuntimeYggdrasilPolicy::from_runtime_config(
+        state.runtime_config(),
+    );
+    let source_path =
+        download_official_texture_to_temp_file(source_url, policy.max_texture_upload_bytes).await?;
+    let result = async {
+        let wardrobe_texture = store_or_reuse_wardrobe_texture(
+            state,
+            StoreTextureAssetInput {
+                user_id: profile.user_id,
+                texture_type,
+                texture_model,
+                source_path: source_path.clone(),
+                visibility: MinecraftTextureVisibility::Private,
+                cleanup_reason: "official texture import failure",
+            },
+        )
+        .await?;
+        let previous = minecraft_profile_texture_repo::find_by_profile_and_type(
+            state.reader_db(),
+            profile.id,
+            texture_type,
+        )
+        .await
+        .map_err(TextureError::from)?;
+
+        let texture = minecraft_profile_texture_repo::upsert_for_profile(
+            state.writer_db(),
+            minecraft_profile_texture_repo::UpsertMinecraftProfileTexture {
+                profile_id: profile.id,
+                texture_id: wardrobe_texture.id,
+                texture_type,
+            },
+        )
+        .await;
+        let texture = match texture {
+            Ok(texture) => texture,
+            Err(error) => {
+                cleanup_texture_asset_if_unreferenced(
+                    state,
+                    &wardrobe_texture,
+                    "official texture bind failure",
+                )
+                .await;
+                return Err(TextureError::from(error));
+            }
+        };
+
+        if let Some(previous) = previous.as_ref()
+            && previous.texture.id != texture.texture.id
+        {
+            cleanup_texture_asset_if_unreferenced(
+                state,
+                &previous.texture,
+                "official texture sync",
+            )
+            .await;
+        }
+        invalidate_profile_texture_caches(state, profile.id).await;
+        invalidate_texture_asset_caches(state, &texture.texture).await;
+        if let Some(previous) = previous.as_ref() {
+            invalidate_texture_asset_caches(state, &previous.texture).await;
+        }
+
+        tracing::debug!(
+            profile_id = profile.id,
+            profile_texture_id = texture.binding.id,
+            texture_id = texture.texture.id,
+            replaced_texture_id = previous.as_ref().map(|previous| previous.texture.id),
+            "imported official Minecraft profile texture"
+        );
+        Ok(StoredTexture {
+            texture,
+            profile: profile.clone(),
+            wardrobe_texture,
+        })
+    }
+    .await;
+    aster_forge_utils::fs::cleanup_temp_file(&source_path).await;
+    result
+}
+
+async fn download_official_texture_to_temp_file(
+    source_url: &str,
+    max_texture_bytes: u64,
+) -> std::result::Result<PathBuf, TextureError> {
+    let url = parse_official_texture_url(source_url)?;
+    let temp_path = std::env::temp_dir().join(format!(
+        "asteryggdrasil-official-texture-{}.png",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let result = async {
+        let http_client = reqwest::Client::builder()
+            .user_agent(OUTBOUND_HTTP_USER_AGENT)
+            .timeout(std::time::Duration::from_secs(
+                OFFICIAL_TEXTURE_DOWNLOAD_TIMEOUT_SECS,
+            ))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| {
+                TextureError::with_detail(
+                    TextureErrorKind::Storage,
+                    format!("Failed to build official texture HTTP client: {error}"),
+                )
+            })?;
+        let response = http_client
+            .get(url)
+            .header("Accept", PNG_CONTENT_TYPE)
+            .send()
+            .await
+            .map_err(|error| {
+                TextureError::with_detail(
+                    TextureErrorKind::Storage,
+                    format!("Failed to download official texture: {error}"),
+                )
+            })?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(TextureError::with_detail(
+                TextureErrorKind::Storage,
+                format!("Official texture download returned {status}"),
+            ));
+        }
+        if let Some(content_length) = response.content_length()
+            && content_length > max_texture_bytes
+        {
+            return Err(TextureError::with_detail(
+                TextureErrorKind::InvalidDimensions,
+                format!("Official texture exceeds {max_texture_bytes} bytes."),
+            ));
+        }
+
+        let mut file = tokio::fs::File::create(&temp_path).await.map_err(|error| {
+            TextureError::with_detail(
+                TextureErrorKind::Storage,
+                format!("Failed to create official texture temp file: {error}"),
+            )
+        })?;
+        let mut written: u64 = 0;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| {
+                TextureError::with_detail(
+                    TextureErrorKind::Storage,
+                    format!("Failed to read official texture response: {error}"),
+                )
+            })?;
+            let chunk_len =
+                aster_forge_utils::numbers::usize_to_u64(chunk.len(), "official texture chunk")
+                    .map_err(AsterError::from)
+                    .map_err(TextureError::from)?;
+            written = written.checked_add(chunk_len).ok_or_else(|| {
+                TextureError::with_detail(
+                    TextureErrorKind::InvalidDimensions,
+                    "Official texture is too large.",
+                )
+            })?;
+            if written > max_texture_bytes {
+                return Err(TextureError::with_detail(
+                    TextureErrorKind::InvalidDimensions,
+                    format!("Official texture exceeds {max_texture_bytes} bytes."),
+                ));
+            }
+            file.write_all(&chunk).await.map_err(|error| {
+                TextureError::with_detail(
+                    TextureErrorKind::Storage,
+                    format!("Failed to write official texture temp file: {error}"),
+                )
+            })?;
+        }
+        file.flush().await.map_err(|error| {
+            TextureError::with_detail(
+                TextureErrorKind::Storage,
+                format!("Failed to flush official texture temp file: {error}"),
+            )
+        })?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = result {
+        aster_forge_utils::fs::cleanup_temp_file(&temp_path).await;
+        return Err(error);
+    }
+    Ok(temp_path)
+}
+
+fn parse_official_texture_url(source_url: &str) -> std::result::Result<Url, TextureError> {
+    let mut url = Url::parse(source_url).map_err(|error| {
+        TextureError::with_detail(
+            TextureErrorKind::InvalidContentType,
+            format!("Invalid official texture URL: {error}"),
+        )
+    })?;
+    let is_official_host = url
+        .host_str()
+        .is_some_and(|host| host.eq_ignore_ascii_case("textures.minecraft.net"));
+    let is_allowed = matches!(url.scheme(), "http" | "https") && is_official_host;
+    if is_official_host && url.scheme() == "http" {
+        url.set_scheme("https").map_err(|_| {
+            TextureError::with_detail(
+                TextureErrorKind::InvalidContentType,
+                "Invalid official texture URL scheme.",
+            )
+        })?;
+    }
+    let is_allowed = is_allowed
+        && url
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("textures.minecraft.net"));
+    if !is_allowed {
+        return Err(TextureError::with_detail(
+            TextureErrorKind::InvalidContentType,
+            "Official texture URL must use textures.minecraft.net.",
+        ));
+    }
+    Ok(url)
 }
 
 pub async fn store_wardrobe_texture<S>(
@@ -2024,6 +2268,7 @@ where
         texture_type = ?texture_type,
         "binding wardrobe texture to profile"
     );
+    ensure_profile_texture_mutation_allowed(profile)?;
     ensure_upload_allowed(profile, texture_type)?;
     let Some(wardrobe_texture) = minecraft_texture_repo::find_by_id_for_user(
         state.reader_db(),
@@ -2112,6 +2357,7 @@ where
         texture_type = ?texture_type,
         "deleting profile texture"
     );
+    ensure_profile_texture_mutation_allowed(profile)?;
     ensure_upload_allowed(profile, texture_type)?;
     let deleted = minecraft_profile_texture_repo::delete_for_profile(
         state.writer_db(),
@@ -2347,6 +2593,20 @@ fn ensure_upload_allowed(
     } else {
         Err(TextureError::new(TextureErrorKind::UploadDisabled))
     }
+}
+
+fn ensure_profile_texture_mutation_allowed(
+    profile: &minecraft_profile::Model,
+) -> std::result::Result<(), TextureError> {
+    if profile.source == MinecraftProfileSource::Microsoft {
+        tracing::debug!(
+            profile_id = profile.id,
+            profile_uuid = %profile.uuid,
+            "texture mutation rejected because official Microsoft profiles are read-only"
+        );
+        return Err(TextureError::new(TextureErrorKind::UploadDisabled));
+    }
+    Ok(())
 }
 
 fn object_storage_key(hash: &str) -> String {

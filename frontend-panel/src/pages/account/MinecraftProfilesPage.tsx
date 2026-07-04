@@ -63,6 +63,7 @@ function MinecraftProfilesLayout({
 	onOpenTextureDialog,
 	onNextProfilePage,
 	onPreviousProfilePage,
+	onRefreshOfficialProfileTextures,
 	onRenameProfile,
 	onSelectTextureFile,
 	onUploadTexture,
@@ -79,6 +80,7 @@ function MinecraftProfilesLayout({
 	renameDialogOpen,
 	renameName,
 	renaming,
+	refreshingOfficialProfileUuid,
 	searchBusy,
 	selectedProfile,
 	selectedUuid,
@@ -104,6 +106,7 @@ function MinecraftProfilesLayout({
 	onOpenTextureDialog: (type: MinecraftTextureType) => void;
 	onNextProfilePage: () => void;
 	onPreviousProfilePage: () => void;
+	onRefreshOfficialProfileTextures: (profile: YggdrasilProfile) => void;
 	onRenameProfile: (event: FormEvent<HTMLFormElement>) => void;
 	onSelectTextureFile: (file: File | null) => void;
 	onUploadTexture: (event: FormEvent<HTMLFormElement>) => void;
@@ -120,6 +123,7 @@ function MinecraftProfilesLayout({
 	renameDialogOpen: boolean;
 	renameName: string;
 	renaming: boolean;
+	refreshingOfficialProfileUuid: string | null;
 	searchBusy: boolean;
 	selectedProfile: YggdrasilProfile | null;
 	selectedUuid: string;
@@ -147,11 +151,13 @@ function MinecraftProfilesLayout({
 					profileTotalPages={profileTotalPages}
 					profiles={profiles}
 					query={query}
+					refreshingOfficialProfileUuid={refreshingOfficialProfileUuid}
 					searchBusy={searchBusy}
 					selectedUuid={selectedUuid}
 					onChangePageSize={onChangePageSize}
 					onCreateProfile={onCreateProfile}
 					onOpenRenameDialog={onOpenRenameDialog}
+					onRefreshOfficialProfileTextures={onRefreshOfficialProfileTextures}
 				/>
 				<ProfilePreviewPanel
 					capeTexture={capeTexture}
@@ -222,6 +228,7 @@ function ProfileListSection({
 	onNextProfilePage,
 	onOpenRenameDialog,
 	onPreviousProfilePage,
+	onRefreshOfficialProfileTextures,
 	profileCurrentPage,
 	profileName,
 	profileNextDisabled,
@@ -232,6 +239,7 @@ function ProfileListSection({
 	profileTotal,
 	profileTotalPages,
 	query,
+	refreshingOfficialProfileUuid,
 	searchBusy,
 	selectedUuid,
 }: {
@@ -243,6 +251,7 @@ function ProfileListSection({
 	onNextProfilePage: () => void;
 	onOpenRenameDialog: (profile: YggdrasilProfile) => void;
 	onPreviousProfilePage: () => void;
+	onRefreshOfficialProfileTextures: (profile: YggdrasilProfile) => void;
 	profileCurrentPage: number;
 	profileName: string;
 	profileNextDisabled: boolean;
@@ -253,6 +262,7 @@ function ProfileListSection({
 	profileTotal: number;
 	profileTotalPages: number;
 	query: string;
+	refreshingOfficialProfileUuid: string | null;
 	searchBusy: boolean;
 	selectedUuid: string;
 }) {
@@ -306,8 +316,10 @@ function ProfileListSection({
 					profileSkinUrls={profileSkinUrls}
 					profiles={profiles}
 					query={query}
+					refreshingOfficialProfileUuid={refreshingOfficialProfileUuid}
 					selectedUuid={selectedUuid}
 					onOpenRenameDialog={onOpenRenameDialog}
+					onRefreshOfficialProfileTextures={onRefreshOfficialProfileTextures}
 				/>
 				<AdminOffsetPagination
 					currentPage={profileCurrentPage}
@@ -380,17 +392,21 @@ function ProfileList({
 	deletingProfile,
 	dispatch,
 	onOpenRenameDialog,
+	onRefreshOfficialProfileTextures,
 	profileSkinUrls,
 	profiles,
 	query,
+	refreshingOfficialProfileUuid,
 	selectedUuid,
 }: {
 	deletingProfile: boolean;
 	dispatch: ProfilesDispatch;
 	onOpenRenameDialog: (profile: YggdrasilProfile) => void;
+	onRefreshOfficialProfileTextures: (profile: YggdrasilProfile) => void;
 	profileSkinUrls: Record<string, string | null>;
 	profiles: YggdrasilProfile[];
 	query: string;
+	refreshingOfficialProfileUuid: string | null;
 	selectedUuid: string;
 }) {
 	const { t } = useTranslation();
@@ -429,7 +445,11 @@ function ProfileList({
 						profile={profile}
 						skinUrl={profileSkinUrls[profile.id] ?? null}
 						selected={profile.id === selectedUuid}
+						refreshingOfficialProfile={
+							refreshingOfficialProfileUuid === profile.id
+						}
 						onOpenRenameDialog={onOpenRenameDialog}
+						onRefreshOfficialProfileTextures={onRefreshOfficialProfileTextures}
 					/>
 				))}
 			</div>
@@ -441,14 +461,18 @@ function ProfileListRow({
 	deletingProfile,
 	dispatch,
 	onOpenRenameDialog,
+	onRefreshOfficialProfileTextures,
 	profile,
+	refreshingOfficialProfile,
 	selected,
 	skinUrl,
 }: {
 	deletingProfile: boolean;
 	dispatch: ProfilesDispatch;
 	onOpenRenameDialog: (profile: YggdrasilProfile) => void;
+	onRefreshOfficialProfileTextures: (profile: YggdrasilProfile) => void;
 	profile: YggdrasilProfile;
+	refreshingOfficialProfile: boolean;
 	selected: boolean;
 	skinUrl: string | null;
 }) {
@@ -501,46 +525,60 @@ function ProfileListRow({
 			</button>
 			<TooltipProvider delay={0}>
 				<div className="flex justify-start gap-1">
-					<ProfileRowActionButton
-						ariaLabel={t("profiles.manageTexturesForProfile", {
-							name: profile.name,
-						})}
-						icon="FileImage"
-						label={t("profiles.manageTexturesAction")}
-						testId={`profile-textures-action-${profile.id}`}
-						onClick={() => {
-							dispatch({ type: "selectedUuid", value: profile.id });
-							dispatch({ type: "textureManageDialogOpen", value: true });
-						}}
-					/>
-					<ProfileRowActionButton
-						ariaLabel={t("profiles.renameAction", {
-							name: profile.name,
-						})}
-						disabled={officialProfile}
-						icon="PencilSimple"
-						label={
-							officialProfile
-								? t("profiles.officialRenameDisabled")
-								: t("profiles.renameShortAction")
-						}
-						testId={`profile-rename-action-${profile.id}`}
-						onClick={() => onOpenRenameDialog(profile)}
-					/>
-					<ProfileRowActionButton
-						ariaLabel={t("profiles.deleteProfileActionFor", {
-							name: profile.name,
-						})}
-						destructive
-						disabled={deletingProfile}
-						icon="Trash"
-						label={t("profiles.deleteProfileAction")}
-						testId={`profile-delete-action-${profile.id}`}
-						onClick={() => {
-							dispatch({ type: "selectedUuid", value: profile.id });
-							dispatch({ type: "deleteProfileDialogOpen", value: true });
-						}}
-					/>
+					{officialProfile ? (
+						<ProfileRowActionButton
+							ariaLabel={t("profiles.refreshOfficialTexturesForProfile", {
+								name: profile.name,
+							})}
+							disabled={refreshingOfficialProfile}
+							icon={refreshingOfficialProfile ? "Spinner" : "RefreshCw"}
+							label={
+								refreshingOfficialProfile
+									? t("profiles.refreshingOfficialTexturesAction")
+									: t("profiles.refreshOfficialTexturesAction")
+							}
+							testId={`profile-refresh-official-textures-action-${profile.id}`}
+							onClick={() => onRefreshOfficialProfileTextures(profile)}
+						/>
+					) : (
+						<>
+							<ProfileRowActionButton
+								ariaLabel={t("profiles.manageTexturesForProfile", {
+									name: profile.name,
+								})}
+								icon="FileImage"
+								label={t("profiles.manageTexturesAction")}
+								testId={`profile-textures-action-${profile.id}`}
+								onClick={() => {
+									dispatch({ type: "selectedUuid", value: profile.id });
+									dispatch({ type: "textureManageDialogOpen", value: true });
+								}}
+							/>
+							<ProfileRowActionButton
+								ariaLabel={t("profiles.renameAction", {
+									name: profile.name,
+								})}
+								icon="PencilSimple"
+								label={t("profiles.renameShortAction")}
+								testId={`profile-rename-action-${profile.id}`}
+								onClick={() => onOpenRenameDialog(profile)}
+							/>
+							<ProfileRowActionButton
+								ariaLabel={t("profiles.deleteProfileActionFor", {
+									name: profile.name,
+								})}
+								destructive
+								disabled={deletingProfile}
+								icon="Trash"
+								label={t("profiles.deleteProfileAction")}
+								testId={`profile-delete-action-${profile.id}`}
+								onClick={() => {
+									dispatch({ type: "selectedUuid", value: profile.id });
+									dispatch({ type: "deleteProfileDialogOpen", value: true });
+								}}
+							/>
+						</>
+					)}
 				</div>
 			</TooltipProvider>
 		</div>
@@ -980,7 +1018,11 @@ function ProfileRowActionButton({
 			>
 				<Icon
 					name={icon}
-					className={cn("size-4", destructive && "text-destructive")}
+					className={cn(
+						"size-4",
+						destructive && "text-destructive",
+						icon === "Spinner" && "animate-spin",
+					)}
 				/>
 			</TooltipTrigger>
 			<TooltipContent>{label}</TooltipContent>

@@ -8,7 +8,7 @@ use crate::db::repository::{
 use crate::entities::{external_auth_identity, external_auth_provider};
 use crate::errors::{AsterError, Result};
 use crate::runtime::SharedRuntimeState;
-use crate::types::external_auth::parse_external_auth_provider_options;
+use crate::types::external_auth::{ExternalAuthProviderKind, parse_external_auth_provider_options};
 use aster_forge_api::{CursorPage, DateTimeIdCursor};
 
 use super::ExternalAuthLinkInfo;
@@ -88,8 +88,11 @@ fn link_to_info(
         .as_deref()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
     let options = parse_external_auth_provider_options(provider.options.as_ref());
-    let allow_unlink =
-        identity.identity_namespace != MINECRAFT_IDENTITY_NAMESPACE && options.allow_unlink;
+    let allow_unlink = external_auth_identity_can_unlink(
+        provider.provider_kind,
+        &identity.identity_namespace,
+        options.allow_unlink,
+    );
     ExternalAuthLinkInfo {
         id: identity.id,
         provider_id: identity.provider_id,
@@ -118,7 +121,11 @@ pub async fn delete_link(state: &impl SharedRuntimeState, user_id: i64, id: i64)
     let provider =
         external_auth_provider_repo::find_by_id(state.writer_db(), identity.provider_id).await?;
     let options = parse_external_auth_provider_options(provider.options.as_ref());
-    if identity.identity_namespace == MINECRAFT_IDENTITY_NAMESPACE || !options.allow_unlink {
+    if !external_auth_identity_can_unlink(
+        provider.provider_kind,
+        &identity.identity_namespace,
+        options.allow_unlink,
+    ) {
         return Err(AsterError::auth_forbidden_code(
             AsterErrorCode::ExternalAuthProviderUnlinkDisabled,
             "external auth identity cannot be unlinked",
@@ -126,6 +133,20 @@ pub async fn delete_link(state: &impl SharedRuntimeState, user_id: i64, id: i64)
     }
 
     external_auth_identity_repo::delete_for_user(state.writer_db(), id, user_id).await
+}
+
+fn external_auth_identity_can_unlink(
+    provider_kind: ExternalAuthProviderKind,
+    identity_namespace: &str,
+    provider_allows_unlink: bool,
+) -> bool {
+    if matches!(
+        provider_kind,
+        ExternalAuthProviderKind::Microsoft | ExternalAuthProviderKind::LinuxDo
+    ) {
+        return false;
+    }
+    identity_namespace != MINECRAFT_IDENTITY_NAMESPACE && provider_allows_unlink
 }
 
 pub async fn cleanup_expired_flows(state: &impl SharedRuntimeState) -> Result<u64> {
@@ -137,4 +158,46 @@ pub async fn cleanup_expired_flows(state: &impl SharedRuntimeState) -> Result<u6
     let email_flows =
         external_auth_email_verification_flow_repo::cleanup_expired(state.writer_db(), now).await?;
     Ok(login_flows + binding_flows + email_flows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn microsoft_and_linuxdo_links_are_not_unlinkable() {
+        assert!(!external_auth_identity_can_unlink(
+            ExternalAuthProviderKind::Microsoft,
+            "https://login.microsoftonline.com/consumers/v2.0",
+            true,
+        ));
+        assert!(!external_auth_identity_can_unlink(
+            ExternalAuthProviderKind::LinuxDo,
+            "https://connect.linux.do",
+            true,
+        ));
+    }
+
+    #[test]
+    fn minecraft_namespace_and_provider_policy_disable_unlinking() {
+        assert!(!external_auth_identity_can_unlink(
+            ExternalAuthProviderKind::Oidc,
+            MINECRAFT_IDENTITY_NAMESPACE,
+            true,
+        ));
+        assert!(!external_auth_identity_can_unlink(
+            ExternalAuthProviderKind::Oidc,
+            "https://example.com",
+            false,
+        ));
+    }
+
+    #[test]
+    fn ordinary_links_can_be_unlinked_when_provider_allows_it() {
+        assert!(external_auth_identity_can_unlink(
+            ExternalAuthProviderKind::Oidc,
+            "https://example.com",
+            true,
+        ));
+    }
 }

@@ -189,7 +189,7 @@ function reducer(state: UiState, action: UiAction): UiState {
 					allowedDomains:
 						action.kind === "linuxdo" ? "" : state.form.allowedDomains,
 					allowLogin: action.kind !== "microsoft",
-					allowUnlink: action.kind !== "microsoft",
+					allowUnlink: action.kind !== "microsoft" && action.kind !== "linuxdo",
 					authorizationUrl: "",
 					autoLinkVerifiedEmailEnabled:
 						action.kind === "linuxdo"

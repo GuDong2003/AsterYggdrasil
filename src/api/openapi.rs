@@ -72,6 +72,7 @@ use utoipa::{Modify, OpenApi};
         crate::api::routes::profiles::create_minecraft_profile,
         crate::api::routes::profiles::rename_minecraft_profile,
         crate::api::routes::profiles::list_minecraft_profile_textures,
+        crate::api::routes::profiles::refresh_official_minecraft_profile_textures,
         crate::api::routes::profiles::bind_minecraft_profile_texture,
         crate::api::routes::profiles::unbind_minecraft_profile_texture,
         crate::api::routes::profiles::delete_minecraft_profile,

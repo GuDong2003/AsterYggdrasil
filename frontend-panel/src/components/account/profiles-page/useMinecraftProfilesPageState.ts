@@ -29,6 +29,7 @@ export type MinecraftProfilesPageState = {
 	renameDialogOpen: boolean;
 	renameName: string;
 	renaming: boolean;
+	refreshingOfficialProfileUuid: string | null;
 	selectedUuid: string;
 	textures: MinecraftTextureMetadata[];
 	texturesLoading: boolean;
@@ -69,6 +70,7 @@ export type MinecraftProfilesPageAction =
 	| { type: "renameDialogOpen"; value: boolean }
 	| { type: "renameName"; value: string }
 	| { type: "renaming"; value: boolean }
+	| { type: "refreshingOfficialProfileUuid"; value: string | null }
 	| { type: "selectedUuid"; value: string }
 	| { type: "textures"; value: MinecraftTextureMetadata[] }
 	| { type: "texturesLoading"; value: boolean }
@@ -99,6 +101,7 @@ const initialState: MinecraftProfilesPageState = {
 	renameDialogOpen: false,
 	renameName: "",
 	renaming: false,
+	refreshingOfficialProfileUuid: null,
 	selectedUuid: "",
 	textures: [],
 	texturesLoading: false,
@@ -132,6 +135,7 @@ function reducer(
 		case "renameDialogOpen":
 		case "renameName":
 		case "renaming":
+		case "refreshingOfficialProfileUuid":
 		case "selectedUuid":
 		case "textures":
 		case "texturesLoading":

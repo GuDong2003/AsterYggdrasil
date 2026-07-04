@@ -9,7 +9,7 @@ use crate::db::repository::{
 };
 use crate::entities::{external_auth_binding_flow, external_auth_identity, external_auth_provider};
 use crate::errors::{AsterError, Result};
-use crate::external_auth::MapExternalAuthResult;
+use crate::external_auth::{MapExternalAuthResult, registry};
 use crate::runtime::SharedRuntimeState;
 use crate::types::external_auth::{ExternalAuthProviderKind, parse_external_auth_provider_options};
 use crate::types::user::UserRole;
@@ -18,11 +18,15 @@ use aster_forge_external_auth::providers::microsoft::normalize_microsoft_tenant_
 use aster_forge_utils::numbers::u64_to_i64;
 use reqwest::Url;
 
-use super::normalize::{normalize_key, normalize_return_path, state_hash};
-use super::{
-    ExternalAuthCallbackQuery, ExternalAuthStartLoginResponse, MICROSOFT_PROVIDER_PUBLIC_KEY,
-    provider_key_matches,
+use super::normalize::{
+    binding_callback_redirect_uri, normalize_key, normalize_return_path, state_hash,
 };
+use super::providers::external_auth_provider_config;
+use super::{
+    ExternalAuthCallbackQuery, ExternalAuthStartLoginResponse, FLOW_TTL_SECS,
+    MICROSOFT_PROVIDER_PUBLIC_KEY, provider_key_matches, public_provider_key,
+};
+use crate::types::yggdrasil::{MinecraftTextureModel, MinecraftTextureType};
 
 const MICROSOFT_LOGIN_BASE: &str = "https://login.microsoftonline.com";
 // HMCL 使用的旧 Live SDK 端点
@@ -56,6 +60,19 @@ struct MicrosoftMinecraftAccount {
     uuid: String,
     name: String,
     xbox_user_hash: Option<String>,
+    official_textures: OfficialMinecraftTextures,
+}
+
+#[derive(Debug, Clone, Default)]
+struct OfficialMinecraftTextures {
+    skin: Option<OfficialMinecraftTexture>,
+    cape: Option<OfficialMinecraftTexture>,
+}
+
+#[derive(Debug, Clone)]
+struct OfficialMinecraftTexture {
+    url: String,
+    texture_model: MinecraftTextureModel,
 }
 
 struct MicrosoftOAuthEndpoints {
@@ -81,9 +98,12 @@ pub async fn start_minecraft_binding(
     let provider = find_minecraft_binding_provider(state, provider_kind, provider_key).await?;
     ensure_provider_enabled(&provider)?;
 
-    // Minecraft 正版账号绑定默认使用设备代码流。
-    // 这样不依赖 Redirect URI，但仍需要后台 provider 配置有效的 Azure Client ID。
-    start_device_code_flow(state, user_id, &provider, return_path).await
+    // 有客户端密钥时按服务端授权码流走固定回调；无密钥时按公共客户端设备码流绑定。
+    if provider_has_client_secret(&provider) {
+        start_authorization_code_binding_flow(state, _req, user_id, &provider, return_path).await
+    } else {
+        start_device_code_flow(state, user_id, &provider, return_path).await
+    }
 }
 
 async fn find_minecraft_binding_provider(
@@ -126,6 +146,59 @@ async fn find_minecraft_binding_provider(
         "external auth provider '{}:{provider_key}'",
         provider_kind.as_str()
     )))
+}
+
+fn provider_has_client_secret(provider: &external_auth_provider::Model) -> bool {
+    provider
+        .client_secret
+        .as_deref()
+        .is_some_and(|secret| !secret.trim().is_empty())
+}
+
+async fn start_authorization_code_binding_flow(
+    state: &impl SharedRuntimeState,
+    req: &actix_web::HttpRequest,
+    user_id: i64,
+    provider: &external_auth_provider::Model,
+    return_path: Option<&str>,
+) -> Result<ExternalAuthStartLoginResponse> {
+    let return_path = normalize_return_path(return_path)?;
+    let redirect_provider_key = public_provider_key(provider.provider_kind, &provider.key);
+    let redirect_uri =
+        binding_callback_redirect_uri(state, req, provider.provider_kind, redirect_provider_key)?;
+    let mut provider_config = external_auth_provider_config(provider);
+    provider_config.scopes = MICROSOFT_MINECRAFT_SCOPES.to_string();
+    let auth_start = registry::default_registry()
+        .get_driver(provider.provider_kind)?
+        .start_authorization(&provider_config, &redirect_uri)
+        .await
+        .map_external_auth()?;
+
+    let now = Utc::now();
+    let ttl = u64_to_i64(FLOW_TTL_SECS, "external auth binding flow ttl")?;
+    let flow = external_auth_binding_flow::ActiveModel {
+        user_id: Set(user_id),
+        provider_id: Set(provider.id),
+        state_hash: Set(state_hash(&auth_start.state)),
+        nonce: Set(auth_start.nonce),
+        pkce_verifier: Set(auth_start.pkce_verifier),
+        redirect_uri: Set(redirect_uri),
+        return_path: Set(Some(return_path)),
+        created_at: Set(now),
+        expires_at: Set(now + Duration::seconds(ttl)),
+        consumed_at: Set(None),
+        ..Default::default()
+    };
+    external_auth_binding_flow_repo::create(state.writer_db(), flow).await?;
+
+    Ok(ExternalAuthStartLoginResponse {
+        authorization_url: auth_start.authorization_url,
+        device_code: None,
+        user_code: None,
+        verification_uri: None,
+        expires_in: None,
+        interval: None,
+    })
 }
 
 async fn start_device_code_flow(
@@ -287,6 +360,7 @@ pub async fn finish_minecraft_binding_callback(
         &account,
     )
     .await?;
+    sync_official_minecraft_textures(state, &applied.profile, &account).await;
 
     Ok(ExternalAuthMinecraftBindingCallbackResult {
         user_id: flow.user_id,
@@ -377,6 +451,7 @@ pub async fn check_device_code_status(
         &account,
     )
     .await?;
+    sync_official_minecraft_textures(state, &applied.profile, &account).await;
 
     Ok(Some(ExternalAuthMinecraftBindingCallbackResult {
         user_id: flow.user_id,
@@ -512,11 +587,13 @@ async fn exchange_microsoft_minecraft_account_with_token(
         &minecraft_token.access_token,
     )
     .await?;
+    let official_textures = profile.official_textures();
 
     Ok(MicrosoftMinecraftAccount {
         uuid: normalize_minecraft_uuid(&profile.id)?,
         name: profile.name,
         xbox_user_hash: Some(xsts.user_hash),
+        official_textures,
     })
 }
 
@@ -699,10 +776,12 @@ async fn exchange_microsoft_minecraft_account(
         &minecraft_token.access_token,
     )
     .await?;
+    let official_textures = profile.official_textures();
     Ok(MicrosoftMinecraftAccount {
         uuid: normalize_minecraft_uuid(&profile.id)?,
         name: profile.name,
         xbox_user_hash: Some(xsts.user_hash),
+        official_textures,
     })
 }
 
@@ -991,6 +1070,80 @@ async fn login_minecraft_with_xbox(
 struct MinecraftProfileResponse {
     id: String,
     name: String,
+    #[serde(default)]
+    skins: Vec<MinecraftProfileSkinResponse>,
+    #[serde(default)]
+    capes: Vec<MinecraftProfileCapeResponse>,
+}
+
+#[derive(Deserialize)]
+struct MinecraftProfileSkinResponse {
+    state: Option<String>,
+    url: Option<String>,
+    variant: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MinecraftProfileCapeResponse {
+    state: Option<String>,
+    url: Option<String>,
+}
+
+impl MinecraftProfileResponse {
+    fn official_textures(&self) -> OfficialMinecraftTextures {
+        OfficialMinecraftTextures {
+            skin: self
+                .skins
+                .iter()
+                .find_map(MinecraftProfileSkinResponse::active_texture),
+            cape: self
+                .capes
+                .iter()
+                .find_map(MinecraftProfileCapeResponse::active_texture),
+        }
+    }
+}
+
+impl MinecraftProfileSkinResponse {
+    fn active_texture(&self) -> Option<OfficialMinecraftTexture> {
+        if !is_active_minecraft_profile_texture(self.state.as_deref()) {
+            return None;
+        }
+        let url = self.url.as_deref()?.trim();
+        if url.is_empty() {
+            return None;
+        }
+        let texture_model = match self.variant.as_deref().map(str::trim) {
+            Some(value) if value.eq_ignore_ascii_case("SLIM") => MinecraftTextureModel::Slim,
+            _ => MinecraftTextureModel::Default,
+        };
+        Some(OfficialMinecraftTexture {
+            url: url.to_string(),
+            texture_model,
+        })
+    }
+}
+
+impl MinecraftProfileCapeResponse {
+    fn active_texture(&self) -> Option<OfficialMinecraftTexture> {
+        if !is_active_minecraft_profile_texture(self.state.as_deref()) {
+            return None;
+        }
+        let url = self.url.as_deref()?.trim();
+        if url.is_empty() {
+            return None;
+        }
+        Some(OfficialMinecraftTexture {
+            url: url.to_string(),
+            texture_model: MinecraftTextureModel::Default,
+        })
+    }
+}
+
+fn is_active_minecraft_profile_texture(state: Option<&str>) -> bool {
+    state
+        .map(str::trim)
+        .is_some_and(|value| value.eq_ignore_ascii_case("ACTIVE"))
 }
 
 async fn fetch_minecraft_profile(
@@ -1095,6 +1248,52 @@ fn normalize_minecraft_uuid(value: &str) -> Result<String> {
         )
     })?;
     Ok(uuid.simple().to_string())
+}
+
+async fn sync_official_minecraft_textures(
+    state: &impl SharedRuntimeState,
+    profile: &crate::entities::minecraft_profile::Model,
+    account: &MicrosoftMinecraftAccount,
+) {
+    if let Some(texture) = account.official_textures.skin.as_ref() {
+        if let Err(error) = crate::services::texture_service::import_official_texture_to_profile(
+            state,
+            profile,
+            MinecraftTextureType::Skin,
+            texture.texture_model,
+            &texture.url,
+        )
+        .await
+        {
+            tracing::warn!(
+                error = ?error,
+                profile_id = profile.id,
+                profile_uuid = %profile.uuid,
+                texture_type = MinecraftTextureType::Skin.as_str(),
+                "failed to sync official Minecraft profile texture"
+            );
+        }
+    }
+
+    if let Some(texture) = account.official_textures.cape.as_ref() {
+        if let Err(error) = crate::services::texture_service::import_official_texture_to_profile(
+            state,
+            profile,
+            MinecraftTextureType::Cape,
+            texture.texture_model,
+            &texture.url,
+        )
+        .await
+        {
+            tracing::warn!(
+                error = ?error,
+                profile_id = profile.id,
+                profile_uuid = %profile.uuid,
+                texture_type = MinecraftTextureType::Cape.as_str(),
+                "failed to sync official Minecraft profile texture"
+            );
+        }
+    }
 }
 
 struct ApplyBindingResult {
@@ -1306,5 +1505,45 @@ mod tests {
             endpoint,
             "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
         );
+    }
+
+    #[test]
+    fn minecraft_profile_response_extracts_active_official_textures() {
+        let profile: MinecraftProfileResponse = serde_json::from_str(
+            r#"{
+                "id": "069a79f444e94726a5befca90e38aaf5",
+                "name": "Notch",
+                "skins": [
+                    {
+                        "state": "INACTIVE",
+                        "url": "https://textures.minecraft.net/texture/inactive",
+                        "variant": "CLASSIC"
+                    },
+                    {
+                        "state": "ACTIVE",
+                        "url": "https://textures.minecraft.net/texture/skin",
+                        "variant": "SLIM"
+                    }
+                ],
+                "capes": [
+                    {
+                        "state": "ACTIVE",
+                        "url": "https://textures.minecraft.net/texture/cape",
+                        "alias": "vanilla"
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let textures = profile.official_textures();
+
+        let skin = textures.skin.unwrap();
+        assert_eq!(skin.url, "https://textures.minecraft.net/texture/skin");
+        assert_eq!(skin.texture_model, MinecraftTextureModel::Slim);
+
+        let cape = textures.cape.unwrap();
+        assert_eq!(cape.url, "https://textures.minecraft.net/texture/cape");
+        assert_eq!(cape.texture_model, MinecraftTextureModel::Default);
     }
 }

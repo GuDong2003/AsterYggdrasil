@@ -252,6 +252,10 @@ export const yggdrasilService = {
 	deleteProfile: (uuid: YggdrasilProfileByUuidPath["uuid"]) =>
 		api.delete<void>(`/profiles/minecraft/${uuid}`),
 	listProfileTextures,
+	refreshOfficialProfileTextures: (uuid: YggdrasilProfileByUuidPath["uuid"]) =>
+		api.post<MinecraftTextureMetadata[]>(
+			`/profiles/minecraft/${uuid}/official-textures/refresh`,
+		),
 	async listProfileSkinTextureUrls(
 		uuids: YggdrasilProfileByUuidPath["uuid"][],
 	) {

@@ -254,7 +254,9 @@ export function formFromProvider(
 	return {
 		allowedDomains: provider.allowed_domains.join(", "),
 		allowLogin: provider.options.allow_login ?? true,
-		allowUnlink: provider.options.allow_unlink ?? true,
+		allowUnlink: providerKindCanAllowUnlink(provider.provider_kind)
+			? (provider.options.allow_unlink ?? true)
+			: false,
 		authorizationUrl: provider.authorization_url ?? "",
 		autoLinkVerifiedEmailEnabled: provider.auto_link_verified_email_enabled,
 		autoProvisionEnabled: provider.auto_provision_enabled,
@@ -429,7 +431,9 @@ function optionsPayload(
 ): ExternalAuthProviderOptions {
 	const policy = {
 		allow_login: form.allowLogin,
-		allow_unlink: form.allowUnlink,
+		allow_unlink: providerKindCanAllowUnlink(form.providerKind)
+			? form.allowUnlink
+			: false,
 	};
 	if (form.providerKind === "microsoft") {
 		return {
@@ -449,6 +453,10 @@ function optionsPayload(
 		};
 	}
 	return policy;
+}
+
+export function providerKindCanAllowUnlink(kind: ExternalAuthKind) {
+	return kind !== "microsoft" && kind !== "linuxdo";
 }
 
 function microsoftTenantValue(form: ExternalAuthProviderFormData) {

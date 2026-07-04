@@ -17,6 +17,7 @@ import {
 	microsoftTenantFromIssuerUrl,
 	microsoftTenantModeForValue,
 	parseAllowedDomains,
+	providerKindCanAllowUnlink,
 	requiredFieldsMissing,
 	shouldShowScopes,
 	testParamsPayload,
@@ -279,6 +280,25 @@ describe("external auth provider shared helpers", () => {
 			require_email_verified: false,
 			subject_claim: "oid",
 			username_claim: "preferred_username",
+		});
+	});
+
+	it("forces Microsoft and LinuxDo providers to be non-removable", () => {
+		expect(providerKindCanAllowUnlink("microsoft")).toBe(false);
+		expect(providerKindCanAllowUnlink("linuxdo")).toBe(false);
+		expect(providerKindCanAllowUnlink("oidc")).toBe(true);
+
+		const payload = createPayload(
+			form({
+				allowUnlink: true,
+				providerKind: "linuxdo",
+			}),
+			providerKind("linuxdo"),
+		);
+
+		expect(payload.options).toMatchObject({
+			allow_unlink: false,
+			linuxdo: {},
 		});
 	});
 

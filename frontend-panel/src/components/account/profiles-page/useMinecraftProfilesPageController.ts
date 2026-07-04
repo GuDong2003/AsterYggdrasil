@@ -41,6 +41,7 @@ export function useMinecraftProfilesPageController() {
 		renameDialogOpen,
 		renameName,
 		renaming,
+		refreshingOfficialProfileUuid,
 		selectedUuid,
 		textures,
 		texturesLoading,
@@ -247,6 +248,10 @@ export function useMinecraftProfilesPageController() {
 
 	async function deleteProfile() {
 		if (!selectedUuid || !selectedProfile) return;
+		if (selectedProfile.source === "microsoft") {
+			toast.error(t("profiles.officialProfileReadonly"));
+			return;
+		}
 		dispatch({ type: "deletingProfile", value: true });
 		try {
 			await yggdrasilService.deleteProfile(selectedUuid);
@@ -264,6 +269,10 @@ export function useMinecraftProfilesPageController() {
 	async function uploadTexture(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!file || !selectedUuid) return;
+		if (selectedProfile?.source === "microsoft") {
+			toast.error(t("profiles.officialProfileReadonly"));
+			return;
+		}
 		if (!(await validateTextureFile(file))) return;
 		dispatch({ type: "loading", value: true });
 		try {
@@ -328,6 +337,10 @@ export function useMinecraftProfilesPageController() {
 
 	async function deleteTexture() {
 		if (!selectedUuid) return;
+		if (selectedProfile?.source === "microsoft") {
+			toast.error(t("profiles.officialProfileReadonly"));
+			return;
+		}
 		dispatch({ type: "loading", value: true });
 		try {
 			await yggdrasilService.unbindProfileTexture({
@@ -348,6 +361,10 @@ export function useMinecraftProfilesPageController() {
 	}
 
 	function openTextureDialog(nextTextureType: MinecraftTextureType) {
+		if (selectedProfile?.source === "microsoft") {
+			toast.error(t("profiles.officialProfileReadonly"));
+			return;
+		}
 		dispatch({ type: "uploadTextureType", value: nextTextureType });
 		dispatch({ type: "textureType", value: nextTextureType });
 		dispatch({
@@ -363,8 +380,31 @@ export function useMinecraftProfilesPageController() {
 	}
 
 	function openDeleteTextureDialog(nextTextureType: MinecraftTextureType) {
+		if (selectedProfile?.source === "microsoft") {
+			toast.error(t("profiles.officialProfileReadonly"));
+			return;
+		}
 		dispatch({ type: "textureType", value: nextTextureType });
 		dispatch({ type: "deleteDialogOpen", value: true });
+	}
+
+	async function refreshOfficialProfileTextures(profile: YggdrasilProfile) {
+		if (profile.source !== "microsoft") return;
+		dispatch({ type: "refreshingOfficialProfileUuid", value: profile.id });
+		try {
+			const textures = await yggdrasilService.refreshOfficialProfileTextures(
+				profile.id,
+			);
+			if (selectedUuid === profile.id) {
+				dispatch({ type: "textures", value: textures });
+			}
+			await loadProfileSkinUrls();
+			toast.success(t("profiles.officialTextureRefreshSuccess"));
+		} catch (nextError) {
+			toast.error(profileActionErrorMessage(nextError));
+		} finally {
+			dispatch({ type: "refreshingOfficialProfileUuid", value: null });
+		}
 	}
 
 	function changeProfilePageSize(value: string | null) {
@@ -420,6 +460,7 @@ export function useMinecraftProfilesPageController() {
 		renameDialogOpen,
 		renameName,
 		renaming,
+		refreshingOfficialProfileUuid,
 		searchBusy,
 		selectedProfile,
 		selectedUuid,
@@ -438,6 +479,8 @@ export function useMinecraftProfilesPageController() {
 		onOpenTextureDialog: openTextureDialog,
 		onNextProfilePage: nextProfilePage,
 		onPreviousProfilePage: previousProfilePage,
+		onRefreshOfficialProfileTextures: (profile: YggdrasilProfile) =>
+			void refreshOfficialProfileTextures(profile),
 		onRenameProfile: renameProfile,
 		onSelectTextureFile: selectTextureFile,
 		onUploadTexture: uploadTexture,

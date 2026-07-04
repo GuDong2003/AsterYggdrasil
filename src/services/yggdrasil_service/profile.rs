@@ -315,6 +315,18 @@ where
         );
         return Ok(None);
     };
+    if profile.source == MinecraftProfileSource::Microsoft {
+        tracing::debug!(
+            user_id,
+            profile_id = profile.id,
+            profile_uuid = %profile.uuid,
+            "minecraft profile delete rejected because official Microsoft profiles are read-only"
+        );
+        return Err(AsterError::auth_forbidden_code(
+            crate::api::error_code::AsterErrorCode::MinecraftProfileDeleteForbidden,
+            "official Minecraft profile cannot be deleted on this site",
+        ));
+    }
 
     super::token::invalidate_token_cache_for_selected_profile(state, profile.id).await?;
     let deleted_textures = texture_service::delete_all_textures_for_profile(state, &profile)

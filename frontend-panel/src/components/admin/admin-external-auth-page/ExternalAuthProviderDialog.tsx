@@ -43,6 +43,7 @@ import {
 	MICROSOFT_CUSTOM_TENANT_MODE,
 	MICROSOFT_TENANT_PRESETS,
 	type MicrosoftTenantMode,
+	providerKindCanAllowUnlink,
 	providerUsesFixedConnection,
 	requiredFieldsMissing,
 	STANDARD_CLAIMS,
@@ -870,6 +871,7 @@ function AccessPanel({
 	onFieldChange: ExternalAuthProviderFieldChange;
 }) {
 	const { t } = useTranslation();
+	const canAllowUnlink = providerKindCanAllowUnlink(form.providerKind);
 
 	return (
 		<section className="rounded-lg border border-border/70 bg-background/70 p-5">
@@ -910,7 +912,8 @@ function AccessPanel({
 				<div className="flex items-start gap-3">
 					<Switch
 						id="external-auth-allow-unlink"
-						checked={form.allowUnlink}
+						checked={canAllowUnlink && form.allowUnlink}
+						disabled={!canAllowUnlink}
 						onCheckedChange={(value) => onFieldChange("allowUnlink", value)}
 					/>
 					<div className="space-y-1">

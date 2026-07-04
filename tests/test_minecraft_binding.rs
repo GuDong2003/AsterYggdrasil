@@ -17,7 +17,6 @@ use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
 const TEST_CLIENT_ID: &str = "minecraft-binding-client";
-const TEST_CLIENT_SECRET: &str = "minecraft-binding-secret";
 const TEST_DEVICE_CODE: &str = "mock-device-code";
 const TEST_USER_CODE: &str = "ABCD-EFGH";
 const TEST_MINECRAFT_UUID: &str = "069a79f444e94726a5befca90e38aaf5";
@@ -210,7 +209,7 @@ fn microsoft_binding_provider_model(base_url: &str) -> external_auth_provider::A
         token_url: Set(Some(format!("{base_url}/oauth2/v2.0/token"))),
         userinfo_url: Set(None),
         client_id: Set(TEST_CLIENT_ID.to_string()),
-        client_secret: Set(Some(TEST_CLIENT_SECRET.to_string())),
+        client_secret: Set(None),
         scopes: Set("openid email profile".to_string()),
         enabled: Set(true),
         auto_provision_enabled: Set(false),

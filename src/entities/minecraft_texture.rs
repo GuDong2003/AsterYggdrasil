@@ -2,7 +2,8 @@
 
 use crate::types::{
     yggdrasil::MinecraftTextureLibraryStatus, yggdrasil::MinecraftTextureModel,
-    yggdrasil::MinecraftTextureType, yggdrasil::MinecraftTextureVisibility,
+    yggdrasil::MinecraftTextureSource, yggdrasil::MinecraftTextureType,
+    yggdrasil::MinecraftTextureVisibility,
 };
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,7 @@ pub struct Model {
     pub id: i64,
     pub user_id: i64,
     pub texture_type: MinecraftTextureType,
+    pub source: MinecraftTextureSource,
     pub hash: String,
     pub storage_key: String,
     pub mime_type: String,

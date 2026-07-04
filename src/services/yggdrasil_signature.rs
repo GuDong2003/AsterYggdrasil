@@ -255,6 +255,7 @@ mod tests {
             allow_profile_name_login: true,
             allow_skin_upload: true,
             allow_cape_upload: true,
+            allow_microsoft_profile_texture_override: false,
             enable_profile_key: true,
             enable_mojang_anti_features: true,
             token_ttl_days: 15,

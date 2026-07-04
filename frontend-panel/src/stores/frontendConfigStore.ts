@@ -108,6 +108,8 @@ function isPublicYggdrasilConfig(
 	return (
 		isRecord(value) &&
 		typeof value.allow_cape_upload === "boolean" &&
+		(value.allow_microsoft_profile_texture_override === undefined ||
+			typeof value.allow_microsoft_profile_texture_override === "boolean") &&
 		typeof value.allow_profile_name_login === "boolean" &&
 		typeof value.allow_skin_upload === "boolean" &&
 		typeof value.max_texture_pixels === "number" &&
@@ -167,6 +169,11 @@ function normalizeFrontendConfig(
 		texture_library: isPublicTextureLibraryConfig(config.texture_library)
 			? config.texture_library
 			: DEFAULT_TEXTURE_LIBRARY_CONFIG,
+		yggdrasil: {
+			...config.yggdrasil,
+			allow_microsoft_profile_texture_override:
+				config.yggdrasil.allow_microsoft_profile_texture_override !== false,
+		},
 	};
 }
 

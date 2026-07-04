@@ -3876,6 +3876,7 @@ export interface components {
             profile_name: string;
             profile_uuid: string;
             source: components["schemas"]["MinecraftTextureMetadataSource"];
+            texture_source?: components["schemas"]["MinecraftTextureSource"] | null;
             /** Format: int64 */
             texture_id: number;
             texture_model: components["schemas"]["MinecraftTextureModel"];
@@ -3890,6 +3891,8 @@ export interface components {
         MinecraftTextureMetadataSource: "bound" | "default";
         /** @enum {string} */
         MinecraftTextureModel: "default" | "slim";
+        /** @enum {string} */
+        MinecraftTextureSource: "local" | "mojang";
         MinecraftTextureModelEntity: {
             created_at: string;
             display_name?: string | null;
@@ -3908,6 +3911,7 @@ export interface components {
             library_status: components["schemas"]["MinecraftTextureLibraryStatus"];
             library_submitted_at: string;
             mime_type: string;
+            source: components["schemas"]["MinecraftTextureSource"];
             storage_key: string;
             texture_model: components["schemas"]["MinecraftTextureModel"];
             texture_type: components["schemas"]["MinecraftTextureType"];
@@ -3984,6 +3988,7 @@ export interface components {
             tags: components["schemas"]["MinecraftTextureTagInfo"][];
             texture_model: components["schemas"]["MinecraftTextureModel"];
             texture_type: components["schemas"]["MinecraftTextureType"];
+            texture_source: components["schemas"]["MinecraftTextureSource"];
             updated_at: string;
             url: string;
             visibility: components["schemas"]["MinecraftTextureVisibility"];
@@ -4137,6 +4142,7 @@ export interface components {
         };
         PublicYggdrasilConfig: {
             allow_cape_upload: boolean;
+            allow_microsoft_profile_texture_override: boolean;
             allow_profile_name_login: boolean;
             allow_skin_upload: boolean;
             /** Format: int64 */

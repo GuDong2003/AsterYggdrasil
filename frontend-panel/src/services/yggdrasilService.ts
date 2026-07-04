@@ -256,6 +256,16 @@ export const yggdrasilService = {
 		api.post<MinecraftTextureMetadata[]>(
 			`/profiles/minecraft/${uuid}/official-textures/refresh`,
 		),
+	applyOfficialProfileTextureSource: (
+		uuid: YggdrasilProfileByUuidPath["uuid"],
+	) =>
+		api.post<MinecraftTextureMetadata[]>(
+			`/profiles/minecraft/${uuid}/texture-source/official`,
+		),
+	applyLocalProfileTextureSource: (uuid: YggdrasilProfileByUuidPath["uuid"]) =>
+		api.post<MinecraftTextureMetadata[]>(
+			`/profiles/minecraft/${uuid}/texture-source/local`,
+		),
 	async listProfileSkinTextureUrls(
 		uuids: YggdrasilProfileByUuidPath["uuid"][],
 	) {

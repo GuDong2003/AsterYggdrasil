@@ -40,6 +40,8 @@ mod m20260701_000002_minecraft_profile_normalized_name;
 mod m20260701_000003_ensure_user_email_nullable;
 mod m20260702_000001_external_auth_binding_flows;
 mod m20260702_000002_minecraft_profile_source;
+mod m20260704_000001_minecraft_texture_source;
+mod m20260704_000002_minecraft_profile_texture_preferences;
 mod time;
 
 pub struct Migrator;
@@ -83,6 +85,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260701_000003_ensure_user_email_nullable::Migration),
             Box::new(m20260702_000001_external_auth_binding_flows::Migration),
             Box::new(m20260702_000002_minecraft_profile_source::Migration),
+            Box::new(m20260704_000001_minecraft_texture_source::Migration),
+            Box::new(m20260704_000002_minecraft_profile_texture_preferences::Migration),
         ]
     }
 }

@@ -155,6 +155,41 @@ where
     texture_service::texture_metadata_for_profile(state, profile).await
 }
 
+pub async fn apply_official_profile_textures<S>(
+    state: &S,
+    profile: &minecraft_profile::Model,
+) -> Result<Vec<texture_service::MinecraftTextureMetadata>>
+where
+    S: CacheRuntimeState
+        + DatabaseRuntimeState
+        + RuntimeConfigRuntimeState
+        + ObjectStorageRuntimeState,
+{
+    if profile.source != MinecraftProfileSource::Microsoft {
+        return Err(AsterError::auth_forbidden_code(
+            AsterErrorCode::MinecraftProfileOfficialNameReadonly,
+            "official texture source requires a Microsoft Minecraft profile",
+        ));
+    }
+
+    let official_textures = fetch_official_profile_textures(state, &profile.uuid).await?;
+    apply_official_texture_slot(
+        state,
+        profile,
+        MinecraftTextureType::Skin,
+        official_textures.skin.as_ref(),
+    )
+    .await?;
+    apply_official_texture_slot(
+        state,
+        profile,
+        MinecraftTextureType::Cape,
+        official_textures.cape.as_ref(),
+    )
+    .await?;
+    texture_service::texture_metadata_for_profile(state, profile).await
+}
+
 async fn sync_official_texture_slot<S>(
     state: &S,
     profile: &minecraft_profile::Model,
@@ -169,6 +204,36 @@ where
 {
     if let Some(texture) = texture {
         texture_service::import_official_texture_to_profile(
+            state,
+            profile,
+            texture_type,
+            texture.texture_model,
+            &texture.url,
+        )
+        .await
+        .map_err(|error| AsterError::internal_error(error.protocol_message()))?;
+    } else {
+        texture_service::delete_official_texture_for_profile_if_bound(state, profile, texture_type)
+            .await
+            .map_err(|error| AsterError::internal_error(error.protocol_message()))?;
+    }
+    Ok(())
+}
+
+async fn apply_official_texture_slot<S>(
+    state: &S,
+    profile: &minecraft_profile::Model,
+    texture_type: MinecraftTextureType,
+    texture: Option<&MojangOfficialTexture>,
+) -> Result<()>
+where
+    S: CacheRuntimeState
+        + DatabaseRuntimeState
+        + RuntimeConfigRuntimeState
+        + ObjectStorageRuntimeState,
+{
+    if let Some(texture) = texture {
+        texture_service::apply_official_texture_to_profile(
             state,
             profile,
             texture_type,

@@ -46,6 +46,7 @@ type ProfilesDispatch = Dispatch<MinecraftProfilesPageAction>;
 
 function MinecraftProfilesLayout({
 	activeTexture,
+	allowMicrosoftProfileTextureOverride,
 	capeTexture,
 	deletingProfile,
 	dispatch,
@@ -63,6 +64,8 @@ function MinecraftProfilesLayout({
 	onOpenTextureDialog,
 	onNextProfilePage,
 	onPreviousProfilePage,
+	onApplyOfficialProfileTextureSource,
+	onApplyLocalProfileTextureSource,
 	onRefreshOfficialProfileTextures,
 	onRenameProfile,
 	onSelectTextureFile,
@@ -89,6 +92,7 @@ function MinecraftProfilesLayout({
 	texturesLoading,
 }: {
 	activeTexture: MinecraftTextureMetadata | null;
+	allowMicrosoftProfileTextureOverride: boolean;
 	capeTexture: MinecraftTextureMetadata | null;
 	deletingProfile: boolean;
 	dispatch: ProfilesDispatch;
@@ -106,6 +110,8 @@ function MinecraftProfilesLayout({
 	onOpenTextureDialog: (type: MinecraftTextureType) => void;
 	onNextProfilePage: () => void;
 	onPreviousProfilePage: () => void;
+	onApplyOfficialProfileTextureSource: (profile: YggdrasilProfile) => void;
+	onApplyLocalProfileTextureSource: (profile: YggdrasilProfile) => void;
 	onRefreshOfficialProfileTextures: (profile: YggdrasilProfile) => void;
 	onRenameProfile: (event: FormEvent<HTMLFormElement>) => void;
 	onSelectTextureFile: (file: File | null) => void;
@@ -136,6 +142,9 @@ function MinecraftProfilesLayout({
 			<ProfilesPageHeader />
 			<div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
 				<ProfileListSection
+					allowMicrosoftProfileTextureOverride={
+						allowMicrosoftProfileTextureOverride
+					}
 					deletingProfile={deletingProfile}
 					dispatch={dispatch}
 					loading={loading}
@@ -168,6 +177,9 @@ function MinecraftProfilesLayout({
 			</div>
 			<ProfileTextureDialogs
 				activeTexture={activeTexture}
+				allowMicrosoftProfileTextureOverride={
+					allowMicrosoftProfileTextureOverride
+				}
 				capeTexture={capeTexture}
 				dispatch={dispatch}
 				loading={loading}
@@ -177,6 +189,11 @@ function MinecraftProfilesLayout({
 				skinTexture={skinTexture}
 				state={state}
 				texturesLoading={texturesLoading}
+				refreshingOfficialProfileUuid={refreshingOfficialProfileUuid}
+				onApplyOfficialProfileTextureSource={
+					onApplyOfficialProfileTextureSource
+				}
+				onApplyLocalProfileTextureSource={onApplyLocalProfileTextureSource}
 				onDeleteTexture={onDeleteTexture}
 				onDragTextureFile={onDragTextureFile}
 				onDropTextureFile={onDropTextureFile}
@@ -220,6 +237,7 @@ function ProfilesPageHeader() {
 }
 
 function ProfileListSection({
+	allowMicrosoftProfileTextureOverride,
 	deletingProfile,
 	dispatch,
 	loading,
@@ -243,6 +261,7 @@ function ProfileListSection({
 	searchBusy,
 	selectedUuid,
 }: {
+	allowMicrosoftProfileTextureOverride: boolean;
 	deletingProfile: boolean;
 	dispatch: ProfilesDispatch;
 	loading: boolean;
@@ -311,6 +330,9 @@ function ProfileListSection({
 					onSubmit={onCreateProfile}
 				/>
 				<ProfileList
+					allowMicrosoftProfileTextureOverride={
+						allowMicrosoftProfileTextureOverride
+					}
 					deletingProfile={deletingProfile}
 					dispatch={dispatch}
 					profileSkinUrls={profileSkinUrls}
@@ -389,6 +411,7 @@ function ProfileCreateForm({
 }
 
 function ProfileList({
+	allowMicrosoftProfileTextureOverride,
 	deletingProfile,
 	dispatch,
 	onOpenRenameDialog,
@@ -399,6 +422,7 @@ function ProfileList({
 	refreshingOfficialProfileUuid,
 	selectedUuid,
 }: {
+	allowMicrosoftProfileTextureOverride: boolean;
 	deletingProfile: boolean;
 	dispatch: ProfilesDispatch;
 	onOpenRenameDialog: (profile: YggdrasilProfile) => void;
@@ -439,6 +463,9 @@ function ProfileList({
 			<div className="divide-y divide-border/70">
 				{profiles.map((profile) => (
 					<ProfileListRow
+						allowMicrosoftProfileTextureOverride={
+							allowMicrosoftProfileTextureOverride
+						}
 						key={profile.id}
 						deletingProfile={deletingProfile}
 						dispatch={dispatch}
@@ -458,6 +485,7 @@ function ProfileList({
 }
 
 function ProfileListRow({
+	allowMicrosoftProfileTextureOverride,
 	deletingProfile,
 	dispatch,
 	onOpenRenameDialog,
@@ -467,6 +495,7 @@ function ProfileListRow({
 	selected,
 	skinUrl,
 }: {
+	allowMicrosoftProfileTextureOverride: boolean;
 	deletingProfile: boolean;
 	dispatch: ProfilesDispatch;
 	onOpenRenameDialog: (profile: YggdrasilProfile) => void;
@@ -478,6 +507,8 @@ function ProfileListRow({
 }) {
 	const { t } = useTranslation();
 	const officialProfile = profile.source === "microsoft";
+	const canManageTextures =
+		!officialProfile || allowMicrosoftProfileTextureOverride;
 	const sourceLabel = officialProfile
 		? t("profiles.sourceMicrosoft")
 		: t("profiles.sourceLocal");
@@ -525,6 +556,20 @@ function ProfileListRow({
 			</button>
 			<TooltipProvider delay={0}>
 				<div className="flex justify-start gap-1">
+					{canManageTextures ? (
+						<ProfileRowActionButton
+							ariaLabel={t("profiles.manageTexturesForProfile", {
+								name: profile.name,
+							})}
+							icon="FileImage"
+							label={t("profiles.manageTexturesAction")}
+							testId={`profile-textures-action-${profile.id}`}
+							onClick={() => {
+								dispatch({ type: "selectedUuid", value: profile.id });
+								dispatch({ type: "textureManageDialogOpen", value: true });
+							}}
+						/>
+					) : null}
 					{officialProfile ? (
 						<ProfileRowActionButton
 							ariaLabel={t("profiles.refreshOfficialTexturesForProfile", {
@@ -542,18 +587,6 @@ function ProfileListRow({
 						/>
 					) : (
 						<>
-							<ProfileRowActionButton
-								ariaLabel={t("profiles.manageTexturesForProfile", {
-									name: profile.name,
-								})}
-								icon="FileImage"
-								label={t("profiles.manageTexturesAction")}
-								testId={`profile-textures-action-${profile.id}`}
-								onClick={() => {
-									dispatch({ type: "selectedUuid", value: profile.id });
-									dispatch({ type: "textureManageDialogOpen", value: true });
-								}}
-							/>
 							<ProfileRowActionButton
 								ariaLabel={t("profiles.renameAction", {
 									name: profile.name,
@@ -622,6 +655,7 @@ function ProfilePreviewPanel({
 
 function ProfileTextureDialogs({
 	activeTexture,
+	allowMicrosoftProfileTextureOverride,
 	capeTexture,
 	dispatch,
 	loading,
@@ -639,8 +673,12 @@ function ProfileTextureDialogs({
 	skinTexture,
 	state,
 	texturesLoading,
+	refreshingOfficialProfileUuid,
+	onApplyOfficialProfileTextureSource,
+	onApplyLocalProfileTextureSource,
 }: {
 	activeTexture: MinecraftTextureMetadata | null;
+	allowMicrosoftProfileTextureOverride: boolean;
 	capeTexture: MinecraftTextureMetadata | null;
 	dispatch: ProfilesDispatch;
 	loading: boolean;
@@ -658,6 +696,9 @@ function ProfileTextureDialogs({
 	skinTexture: MinecraftTextureMetadata | null;
 	state: MinecraftProfilesPageState;
 	texturesLoading: boolean;
+	refreshingOfficialProfileUuid: string | null;
+	onApplyOfficialProfileTextureSource: (profile: YggdrasilProfile) => void;
+	onApplyLocalProfileTextureSource: (profile: YggdrasilProfile) => void;
 }) {
 	const { t } = useTranslation();
 
@@ -680,6 +721,21 @@ function ProfileTextureDialogs({
 								: t("profiles.workbenchEmptyHint")}
 						</DialogDescription>
 					</DialogHeader>
+					{selectedProfile?.source === "microsoft" ? (
+						<OfficialTextureSourceSwitch
+							allowLocalTextures={allowMicrosoftProfileTextureOverride}
+							capeTexture={capeTexture}
+							loading={
+								loading ||
+								texturesLoading ||
+								refreshingOfficialProfileUuid === selectedProfile.id
+							}
+							profile={selectedProfile}
+							skinTexture={skinTexture}
+							onApplyLocal={onApplyLocalProfileTextureSource}
+							onApplyOfficial={onApplyOfficialProfileTextureSource}
+						/>
+					) : null}
 					<div className="overflow-hidden rounded-lg border border-border/70 bg-muted/12 dark:border-white/10 dark:bg-muted/8">
 						<div className="divide-y divide-border/70 dark:divide-white/10">
 							<TextureSlotCard
@@ -1027,6 +1083,83 @@ function ProfileRowActionButton({
 			</TooltipTrigger>
 			<TooltipContent>{label}</TooltipContent>
 		</Tooltip>
+	);
+}
+
+function OfficialTextureSourceSwitch({
+	allowLocalTextures,
+	capeTexture,
+	loading,
+	onApplyLocal,
+	onApplyOfficial,
+	profile,
+	skinTexture,
+}: {
+	allowLocalTextures: boolean;
+	capeTexture: MinecraftTextureMetadata | null;
+	loading: boolean;
+	onApplyLocal: (profile: YggdrasilProfile) => void;
+	onApplyOfficial: (profile: YggdrasilProfile) => void;
+	profile: YggdrasilProfile;
+	skinTexture: MinecraftTextureMetadata | null;
+}) {
+	const { t } = useTranslation();
+	const boundTextures = [skinTexture, capeTexture].filter(
+		(texture): texture is MinecraftTextureMetadata =>
+			Boolean(texture && texture.source === "bound"),
+	);
+	const hasLocalTexture = boundTextures.some(
+		(texture) => texture.texture_source === "local",
+	);
+	const modeLabel = hasLocalTexture
+		? t("profiles.textureSourceLocalActive")
+		: t("profiles.textureSourceOfficialActive");
+
+	return (
+		<div className="rounded-lg border border-border/70 bg-background/80 p-3 dark:border-white/10">
+			<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+				<div className="min-w-0">
+					<div className="flex flex-wrap items-center gap-2">
+						<div className="text-sm font-semibold">
+							{t("profiles.textureSourceSwitchTitle")}
+						</div>
+						<Badge variant="outline" className="rounded-md">
+							{modeLabel}
+						</Badge>
+					</div>
+					<p className="mt-1 text-xs leading-5 text-muted-foreground">
+						{t("profiles.textureSourceSwitchDescription")}
+					</p>
+				</div>
+				<div className="grid grid-cols-2 gap-2 sm:w-auto">
+					<Button
+						type="button"
+						size="sm"
+						variant={hasLocalTexture ? "outline" : "default"}
+						disabled={loading}
+						onClick={() => onApplyOfficial(profile)}
+					>
+						<Icon name="RefreshCw" className="size-4" />
+						{t("profiles.textureSourceOfficialAction")}
+					</Button>
+					<Button
+						type="button"
+						size="sm"
+						variant={hasLocalTexture ? "default" : "outline"}
+						disabled={loading || !allowLocalTextures}
+						onClick={() => onApplyLocal(profile)}
+					>
+						<Icon name="FileImage" className="size-4" />
+						{t("profiles.textureSourceLocalAction")}
+					</Button>
+				</div>
+			</div>
+			{allowLocalTextures ? null : (
+				<p className="mt-2 text-xs text-muted-foreground">
+					{t("profiles.officialProfileTextureReadonly")}
+				</p>
+			)}
+		</div>
 	);
 }
 

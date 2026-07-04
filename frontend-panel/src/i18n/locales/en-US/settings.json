@@ -299,6 +299,8 @@
 	"settings_item_yggdrasil_allow_skin_upload_desc": "Allow launcher protocol clients to upload skin textures for Minecraft profiles.",
 	"settings_item_yggdrasil_allow_cape_upload_label": "Cape upload",
 	"settings_item_yggdrasil_allow_cape_upload_desc": "Allow launcher protocol clients to upload cape textures for Minecraft profiles.",
+	"settings_item_yggdrasil_allow_microsoft_profile_texture_override_label": "Microsoft profile local textures",
+	"settings_item_yggdrasil_allow_microsoft_profile_texture_override_desc": "Allow Microsoft-bound profiles to use skin-site textures like regular profiles by default. Disable it to keep Microsoft profiles limited to synced Mojang textures.",
 	"settings_item_yggdrasil_enable_profile_key_label": "Profile key certificates",
 	"settings_item_yggdrasil_enable_profile_key_desc": "Expose authlib-injector profile key support and serve Minecraft services player certificates for secure chat compatibility.",
 	"settings_item_yggdrasil_enable_mojang_anti_features_label": "Minecraft services policy",

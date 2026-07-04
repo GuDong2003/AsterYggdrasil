@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { STORAGE_KEYS } from "@/lib/storage";
-import type { PublicFrontendConfig } from "@/types/api";
+import type { PublicFrontendConfig, PublicYggdrasilConfig } from "@/types/api";
 
 const frontendConfigServiceMock = vi.hoisted(() => ({
 	get: vi.fn(),
@@ -26,6 +26,7 @@ const frontendConfig = {
 	},
 	yggdrasil: {
 		allow_cape_upload: true,
+		allow_microsoft_profile_texture_override: true,
 		allow_profile_name_login: true,
 		allow_skin_upload: true,
 		max_texture_pixels: 4096 * 4096,
@@ -69,11 +70,35 @@ describe("frontendConfigStore cache", () => {
 			isLoaded: true,
 			yggdrasil: {
 				server_name: "TestYggdrasil",
+				allow_microsoft_profile_texture_override: true,
 			},
 		});
 		expect(useFrontendConfigStore.getState().branding.title).toBe(
 			"TestYggdrasil",
 		);
+	});
+
+	it("defaults Microsoft profile texture override to enabled for legacy cached configs", async () => {
+		const legacyConfig = JSON.parse(
+			JSON.stringify(frontendConfig),
+		) as PublicFrontendConfig;
+		delete (
+			legacyConfig.yggdrasil as Partial<PublicYggdrasilConfig>
+		).allow_microsoft_profile_texture_override;
+		localStorage.setItem(
+			STORAGE_KEYS.cachedFrontendConfig,
+			JSON.stringify({
+				config: legacyConfig,
+				cachedAt: 123,
+			}),
+		);
+
+		const { useFrontendConfigStore } = await loadStore();
+
+		expect(
+			useFrontendConfigStore.getState().yggdrasil
+				?.allow_microsoft_profile_texture_override,
+		).toBe(true);
 	});
 
 	it("removes malformed JSON cache entries during startup", async () => {

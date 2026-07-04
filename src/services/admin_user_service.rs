@@ -663,6 +663,7 @@ mod tests {
             minecraft_texture_repo::CreateMinecraftTexture {
                 user_id,
                 texture_type: MinecraftTextureType::Skin,
+                source: crate::types::yggdrasil::MinecraftTextureSource::Local,
                 hash: storage_key,
                 storage_key,
                 mime_type: "image/png",

@@ -298,6 +298,8 @@
 	"settings_item_yggdrasil_allow_skin_upload_desc": "允许启动器协议端为 Minecraft 角色档案上传皮肤材质。",
 	"settings_item_yggdrasil_allow_cape_upload_label": "披风上传",
 	"settings_item_yggdrasil_allow_cape_upload_desc": "允许启动器协议端为 Minecraft 角色档案上传披风材质。",
+	"settings_item_yggdrasil_allow_microsoft_profile_texture_override_label": "正版档案本站材质",
+	"settings_item_yggdrasil_allow_microsoft_profile_texture_override_desc": "默认允许绑定 Microsoft 的正版角色档案像普通档案一样使用皮肤站材质；关闭后正版档案只能同步 Mojang 官方材质。",
 	"settings_item_yggdrasil_enable_profile_key_label": "角色密钥证书",
 	"settings_item_yggdrasil_enable_profile_key_desc": "在 authlib-injector 元数据中声明角色密钥支持，并提供 Minecraft 服务玩家证书端点用于安全聊天兼容。",
 	"settings_item_yggdrasil_enable_mojang_anti_features_label": "Minecraft 服务策略",

@@ -177,11 +177,7 @@ where
         height: texture.texture.height,
         file_size: texture.texture.file_size,
         mime_type: texture.texture.mime_type.clone(),
-        url: crate::services::yggdrasil_signature::texture_object_url(
-            &policy,
-            &texture.texture.hash,
-            &texture.texture.storage_key,
-        ),
+        url: site_texture_url(&policy, &texture.texture.hash),
         preview_url: super::current_texture_preview_url(
             state.runtime_config(),
             &texture.texture.hash,
@@ -189,6 +185,7 @@ where
             texture.texture.texture_model,
         ),
         source: MinecraftTextureMetadataSource::Bound,
+        texture_source: Some(texture.texture.source),
         created_at: texture.binding.created_at,
         updated_at: texture.binding.updated_at,
     }
@@ -227,6 +224,7 @@ where
             skin.model,
         ),
         source: MinecraftTextureMetadataSource::Default,
+        texture_source: None,
         created_at: profile.created_at,
         updated_at: profile.updated_at,
     })
@@ -268,17 +266,14 @@ where
         height: texture.height,
         file_size: texture.file_size,
         mime_type: texture.mime_type.clone(),
-        url: crate::services::yggdrasil_signature::texture_object_url(
-            &policy,
-            &texture.hash,
-            &texture.storage_key,
-        ),
+        url: site_texture_url(&policy, &texture.hash),
         preview_url: super::current_texture_preview_url(
             state.runtime_config(),
             &texture.hash,
             texture.texture_type,
             texture.texture_model,
         ),
+        texture_source: texture.source,
         created_at: texture.created_at,
         updated_at: texture.updated_at,
     }
@@ -292,6 +287,10 @@ fn texture_display_name(texture: &minecraft_texture::Model) -> String {
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| texture.hash.chars().take(16).collect())
+}
+
+fn site_texture_url(policy: &RuntimeYggdrasilPolicy, hash: &str) -> String {
+    crate::services::yggdrasil_signature::texture_base_url(policy, hash)
 }
 
 pub async fn wardrobe_texture_metadata_by_texture_ids<S>(
@@ -454,11 +453,7 @@ where
         height: texture.height,
         file_size: texture.file_size,
         mime_type: texture.mime_type.clone(),
-        url: crate::services::yggdrasil_signature::texture_object_url(
-            &policy,
-            &texture.hash,
-            &texture.storage_key,
-        ),
+        url: site_texture_url(&policy, &texture.hash),
         preview_url: super::current_texture_preview_url(
             state.runtime_config(),
             &texture.hash,

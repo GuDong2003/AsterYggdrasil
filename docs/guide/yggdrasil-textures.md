@@ -21,6 +21,28 @@ DELETE /api/v1/profiles/minecraft/{uuid}/textures/{skin|cape}
 
 Yggdrasil 协议接口返回协议格式，不使用项目 API envelope。`/api/v1/...` 站点和管理接口继续返回统一 envelope。
 
+## Microsoft 绑定档案
+
+用户绑定 Microsoft 正版账号后，站点会使用正版 UUID 和正版玩家名创建 Minecraft profile。
+这类 profile 的名称和删除操作受保护：
+
+- 不允许用户重命名。
+- 不允许用户删除。
+- 允许在系统配置开启 `yggdrasil_allow_microsoft_profile_texture_override` 时使用本站 wardrobe 材质。
+
+该配置默认开启。开启后，Microsoft 绑定档案可以像普通皮肤站档案一样绑定、上传和解绑 skin/cape。
+关闭后，Microsoft 绑定档案只能使用从 Mojang 同步来的官方材质。
+
+绑定 Microsoft 正版账号时，系统会尝试把 Mojang 官方 skin/cape 下载到当前用户的 wardrobe，并绑定到该 profile。
+这些材质会标记为 `mojang` 来源。用户后续手动选择或上传的材质会标记为 `local` 来源。
+
+“更新正版皮肤”只同步 Mojang 官方材质到 wardrobe：
+
+- 如果当前槽位为空，系统会绑定最新官方材质。
+- 如果当前槽位仍是 `mojang` 来源，系统会用最新官方材质替换。
+- 如果当前槽位已经是用户手动选择的 `local` 来源，系统只导入官方材质到 wardrobe，不覆盖用户当前选择。
+- 如果 Mojang 不再返回某个官方槽位，系统只会清除当前绑定的 `mojang` 来源材质，不会删除或解绑用户本地材质。
+
 ## Wardrobe 和公共材质库
 
 Wardrobe 是用户自己的材质库。上传到 wardrobe 的材质默认只属于当前用户，用户可以把其中一张绑定到自己的 Minecraft profile，也可以把材质设置为公开并提交到公共材质库。

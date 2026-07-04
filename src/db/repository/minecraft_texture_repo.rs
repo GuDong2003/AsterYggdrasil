@@ -4,8 +4,8 @@ use crate::entities::minecraft_texture::{self, Entity as MinecraftTexture};
 use crate::errors::{AsterError, MapAsterErr, Result};
 use crate::types::{
     yggdrasil::MinecraftTextureLibraryStatus, yggdrasil::MinecraftTextureModel,
-    yggdrasil::MinecraftTextureType, yggdrasil::MinecraftTextureVisibility,
-    yggdrasil::TextureTagSearchMethod,
+    yggdrasil::MinecraftTextureSource, yggdrasil::MinecraftTextureType,
+    yggdrasil::MinecraftTextureVisibility, yggdrasil::TextureTagSearchMethod,
 };
 use aster_forge_api::CursorSlice;
 use chrono::{DateTime, Utc};
@@ -18,6 +18,7 @@ use sea_orm::{
 pub struct CreateMinecraftTexture<'a> {
     pub user_id: i64,
     pub texture_type: MinecraftTextureType,
+    pub source: MinecraftTextureSource,
     pub hash: &'a str,
     pub storage_key: &'a str,
     pub mime_type: &'a str,
@@ -73,6 +74,7 @@ pub async fn create<C: ConnectionTrait>(
     minecraft_texture::ActiveModel {
         user_id: Set(input.user_id),
         texture_type: Set(input.texture_type),
+        source: Set(input.source),
         hash: Set(input.hash.to_string()),
         storage_key: Set(input.storage_key.to_string()),
         mime_type: Set(input.mime_type.to_string()),
@@ -399,12 +401,14 @@ pub async fn find_wardrobe_by_fingerprint<C: ConnectionTrait>(
     db: &C,
     user_id: i64,
     texture_type: MinecraftTextureType,
+    source: MinecraftTextureSource,
     hash: &str,
     texture_model: MinecraftTextureModel,
 ) -> Result<Option<minecraft_texture::Model>> {
     MinecraftTexture::find()
         .filter(minecraft_texture::Column::UserId.eq(user_id))
         .filter(minecraft_texture::Column::TextureType.eq(texture_type))
+        .filter(minecraft_texture::Column::Source.eq(source))
         .filter(minecraft_texture::Column::Hash.eq(hash))
         .filter(minecraft_texture::Column::TextureModel.eq(texture_model))
         .filter(minecraft_texture::Column::IsWardrobeItem.eq(true))
@@ -485,6 +489,7 @@ pub async fn create_wardrobe_copy<C: ConnectionTrait>(
     minecraft_texture::ActiveModel {
         user_id: Set(user_id),
         texture_type: Set(texture.texture_type),
+        source: Set(MinecraftTextureSource::Local),
         hash: Set(texture.hash.clone()),
         storage_key: Set(texture.storage_key.clone()),
         mime_type: Set(texture.mime_type.clone()),

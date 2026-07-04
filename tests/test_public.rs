@@ -8,10 +8,10 @@ use aster_yggdrasil::config::{
     definitions::{
         AUTH_ALLOW_USER_REGISTRATION_KEY, BRANDING_DESCRIPTION_KEY, BRANDING_FAVICON_URL_KEY,
         BRANDING_TITLE_KEY, BRANDING_WORDMARK_DARK_URL_KEY, PUBLIC_SITE_URL_KEY,
-        YGGDRASIL_ALLOW_CAPE_UPLOAD_KEY, YGGDRASIL_ALLOW_PROFILE_NAME_LOGIN_KEY,
-        YGGDRASIL_ALLOW_SKIN_UPLOAD_KEY, YGGDRASIL_MAX_TEXTURE_PIXELS_KEY,
-        YGGDRASIL_MAX_TEXTURE_UPLOAD_BYTES_KEY, YGGDRASIL_PUBLIC_BASE_URL_KEY,
-        YGGDRASIL_SERVER_NAME_KEY, YGGDRASIL_SKIN_DOMAINS_KEY,
+        YGGDRASIL_ALLOW_CAPE_UPLOAD_KEY, YGGDRASIL_ALLOW_MICROSOFT_PROFILE_TEXTURE_OVERRIDE_KEY,
+        YGGDRASIL_ALLOW_PROFILE_NAME_LOGIN_KEY, YGGDRASIL_ALLOW_SKIN_UPLOAD_KEY,
+        YGGDRASIL_MAX_TEXTURE_PIXELS_KEY, YGGDRASIL_MAX_TEXTURE_UPLOAD_BYTES_KEY,
+        YGGDRASIL_PUBLIC_BASE_URL_KEY, YGGDRASIL_SERVER_NAME_KEY, YGGDRASIL_SKIN_DOMAINS_KEY,
     },
     yggdrasil::{DEFAULT_YGGDRASIL_MAX_TEXTURE_PIXELS, DEFAULT_YGGDRASIL_MAX_TEXTURE_UPLOAD_BYTES},
 };
@@ -60,6 +60,10 @@ async fn public_frontend_config_returns_default_bootstrap_config() {
     assert_eq!(body["data"]["yggdrasil"]["allow_profile_name_login"], true);
     assert_eq!(body["data"]["yggdrasil"]["allow_skin_upload"], true);
     assert_eq!(body["data"]["yggdrasil"]["allow_cape_upload"], true);
+    assert_eq!(
+        body["data"]["yggdrasil"]["allow_microsoft_profile_texture_override"],
+        true
+    );
     assert_eq!(
         body["data"]["yggdrasil"]["max_texture_upload_bytes"],
         DEFAULT_YGGDRASIL_MAX_TEXTURE_UPLOAD_BYTES
@@ -122,6 +126,10 @@ async fn public_frontend_config_uses_runtime_overrides() {
         "false",
     ));
     state.runtime_config.apply(common::system_config_model(
+        YGGDRASIL_ALLOW_MICROSOFT_PROFILE_TEXTURE_OVERRIDE_KEY,
+        "false",
+    ));
+    state.runtime_config.apply(common::system_config_model(
         YGGDRASIL_MAX_TEXTURE_UPLOAD_BYTES_KEY,
         "1234567",
     ));
@@ -168,6 +176,10 @@ async fn public_frontend_config_uses_runtime_overrides() {
     assert_eq!(body["data"]["yggdrasil"]["allow_profile_name_login"], false);
     assert_eq!(body["data"]["yggdrasil"]["allow_skin_upload"], false);
     assert_eq!(body["data"]["yggdrasil"]["allow_cape_upload"], false);
+    assert_eq!(
+        body["data"]["yggdrasil"]["allow_microsoft_profile_texture_override"],
+        false
+    );
     assert_eq!(
         body["data"]["yggdrasil"]["max_texture_upload_bytes"],
         1_234_567

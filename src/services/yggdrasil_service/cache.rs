@@ -219,6 +219,7 @@ where
 fn yggdrasil_policy_fingerprint(policy: &RuntimeYggdrasilPolicy) -> String {
     #[derive(Serialize)]
     struct Fingerprint<'a> {
+        allow_microsoft_profile_texture_override: bool,
         public_base_urls: &'a [String],
         texture_public_base_url: &'a Option<String>,
         signature_public_key_hash: String,
@@ -226,6 +227,7 @@ fn yggdrasil_policy_fingerprint(policy: &RuntimeYggdrasilPolicy) -> String {
     }
 
     let payload = serde_json::to_vec(&Fingerprint {
+        allow_microsoft_profile_texture_override: policy.allow_microsoft_profile_texture_override,
         public_base_urls: &policy.public_base_urls,
         texture_public_base_url: &policy.texture_public_base_url,
         signature_public_key_hash: aster_forge_crypto::sha256_hex(

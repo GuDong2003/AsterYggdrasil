@@ -45,8 +45,9 @@ pub use types::{
 use aster_forge_utils::text::char_count;
 
 use crate::db::repository::{
-    minecraft_profile_repo, minecraft_profile_texture_repo, minecraft_texture_repo,
-    minecraft_texture_report_repo, minecraft_texture_tag_repo, user_repo,
+    minecraft_profile_repo, minecraft_profile_texture_preference_repo,
+    minecraft_profile_texture_repo, minecraft_texture_repo, minecraft_texture_report_repo,
+    minecraft_texture_tag_repo, user_repo,
 };
 use crate::entities::{
     minecraft_profile, minecraft_texture, minecraft_texture_report, user, yggdrasil_token,
@@ -60,7 +61,8 @@ use crate::types::{
     user::UserBanScope, yggdrasil::MinecraftProfileSource,
     yggdrasil::MinecraftTextureLibraryStatus, yggdrasil::MinecraftTextureModel,
     yggdrasil::MinecraftTextureReportReason, yggdrasil::MinecraftTextureReportStatus,
-    yggdrasil::MinecraftTextureType, yggdrasil::MinecraftTextureVisibility,
+    yggdrasil::MinecraftTextureSource, yggdrasil::MinecraftTextureType,
+    yggdrasil::MinecraftTextureVisibility,
 };
 use crate::utils::OUTBOUND_HTTP_USER_AGENT;
 use aster_forge_api::{CursorPage, DateTimeIdCursor, NullablePatch, SortOrderNameIdCursor};
@@ -1374,16 +1376,21 @@ where
         texture_model = ?texture_model,
         "storing profile texture"
     );
-    ensure_profile_texture_mutation_allowed(profile)?;
+    let policy = crate::config::yggdrasil::RuntimeYggdrasilPolicy::from_runtime_config(
+        state.runtime_config(),
+    );
+    ensure_profile_texture_mutation_allowed(&policy, profile)?;
     ensure_upload_allowed(profile, texture_type)?;
     let wardrobe_texture = store_or_reuse_wardrobe_texture(
         state,
         StoreTextureAssetInput {
             user_id: profile.user_id,
             texture_type,
+            source: MinecraftTextureSource::Local,
             texture_model,
             source_path,
             visibility: MinecraftTextureVisibility::Private,
+            display_name: None,
             cleanup_reason: "launcher texture wardrobe registration failure",
         },
     )
@@ -1413,6 +1420,7 @@ where
             return Err(TextureError::from(error));
         }
     };
+    remember_local_texture_preset(state, profile, &texture.texture).await?;
 
     if let Some(previous) = previous.as_ref()
         && previous.texture.id != texture.texture.id
@@ -1446,7 +1454,62 @@ pub async fn import_official_texture_to_profile<S>(
     texture_type: MinecraftTextureType,
     texture_model: MinecraftTextureModel,
     source_url: &str,
-) -> std::result::Result<StoredTexture, TextureError>
+) -> std::result::Result<(), TextureError>
+where
+    S: CacheRuntimeState
+        + DatabaseRuntimeState
+        + RuntimeConfigRuntimeState
+        + ObjectStorageRuntimeState,
+{
+    import_official_texture_to_profile_with_mode(
+        state,
+        profile,
+        texture_type,
+        texture_model,
+        source_url,
+        OfficialTextureBindingMode::PreserveLocal,
+    )
+    .await
+}
+
+pub async fn apply_official_texture_to_profile<S>(
+    state: &S,
+    profile: &minecraft_profile::Model,
+    texture_type: MinecraftTextureType,
+    texture_model: MinecraftTextureModel,
+    source_url: &str,
+) -> std::result::Result<(), TextureError>
+where
+    S: CacheRuntimeState
+        + DatabaseRuntimeState
+        + RuntimeConfigRuntimeState
+        + ObjectStorageRuntimeState,
+{
+    import_official_texture_to_profile_with_mode(
+        state,
+        profile,
+        texture_type,
+        texture_model,
+        source_url,
+        OfficialTextureBindingMode::ReplaceCurrent,
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OfficialTextureBindingMode {
+    PreserveLocal,
+    ReplaceCurrent,
+}
+
+async fn import_official_texture_to_profile_with_mode<S>(
+    state: &S,
+    profile: &minecraft_profile::Model,
+    texture_type: MinecraftTextureType,
+    texture_model: MinecraftTextureModel,
+    source_url: &str,
+    binding_mode: OfficialTextureBindingMode,
+) -> std::result::Result<(), TextureError>
 where
     S: CacheRuntimeState
         + DatabaseRuntimeState
@@ -1472,9 +1535,11 @@ where
             StoreTextureAssetInput {
                 user_id: profile.user_id,
                 texture_type,
+                source: MinecraftTextureSource::Mojang,
                 texture_model,
                 source_path: source_path.clone(),
                 visibility: MinecraftTextureVisibility::Private,
+                display_name: Some(official_texture_display_name(texture_type)),
                 cleanup_reason: "official texture import failure",
             },
         )
@@ -1486,6 +1551,22 @@ where
         )
         .await
         .map_err(TextureError::from)?;
+        let should_bind =
+            binding_mode == OfficialTextureBindingMode::ReplaceCurrent
+                || previous.as_ref().is_none_or(|previous| {
+                    previous.texture.source == MinecraftTextureSource::Mojang
+                        && previous.texture.texture_type == texture_type
+                });
+        if !should_bind {
+            invalidate_texture_asset_caches(state, &wardrobe_texture).await;
+            tracing::debug!(
+                profile_id = profile.id,
+                texture_id = wardrobe_texture.id,
+                previous_texture_id = previous.as_ref().map(|previous| previous.texture.id),
+                "imported official Minecraft texture to wardrobe without replacing local profile texture"
+            );
+            return Ok(());
+        }
 
         let texture = minecraft_profile_texture_repo::upsert_for_profile(
             state.writer_db(),
@@ -1532,15 +1613,70 @@ where
             replaced_texture_id = previous.as_ref().map(|previous| previous.texture.id),
             "imported official Minecraft profile texture"
         );
-        Ok(StoredTexture {
-            texture,
-            profile: profile.clone(),
-            wardrobe_texture,
-        })
+        Ok(())
     }
     .await;
     aster_forge_utils::fs::cleanup_temp_file(&source_path).await;
     result
+}
+
+pub async fn apply_local_texture_presets_to_profile<S>(
+    state: &S,
+    user_id: i64,
+    profile: &minecraft_profile::Model,
+) -> std::result::Result<Vec<MinecraftTextureMetadata>, TextureError>
+where
+    S: CacheRuntimeState
+        + DatabaseRuntimeState
+        + ObjectStorageRuntimeState
+        + RuntimeConfigRuntimeState,
+{
+    if profile.source != MinecraftProfileSource::Microsoft {
+        return Err(TextureError::new(TextureErrorKind::ForbiddenProfile));
+    }
+
+    let mut applied_count = 0usize;
+    for texture_type in [MinecraftTextureType::Skin, MinecraftTextureType::Cape] {
+        let Some(preference) = minecraft_profile_texture_preference_repo::find_by_profile_and_type(
+            state.reader_db(),
+            profile.id,
+            texture_type,
+        )
+        .await
+        .map_err(TextureError::from)?
+        else {
+            continue;
+        };
+        let Some(texture) = minecraft_texture_repo::find_by_id_for_user(
+            state.reader_db(),
+            preference.texture_id,
+            user_id,
+        )
+        .await
+        .map_err(TextureError::from)?
+        else {
+            continue;
+        };
+        if texture.texture_type != texture_type
+            || texture.source != MinecraftTextureSource::Local
+            || !texture.is_wardrobe_item
+        {
+            continue;
+        }
+        bind_wardrobe_texture_to_profile(state, user_id, profile, texture.id, texture_type).await?;
+        applied_count += 1;
+    }
+
+    if applied_count == 0 {
+        return Err(TextureError::with_detail(
+            TextureErrorKind::NotFound,
+            "local texture preset",
+        ));
+    }
+
+    texture_metadata_for_profile(state, profile)
+        .await
+        .map_err(TextureError::from)
 }
 
 async fn download_official_texture_to_temp_file(
@@ -1705,9 +1841,11 @@ where
         StoreTextureAssetInput {
             user_id,
             texture_type,
+            source: MinecraftTextureSource::Local,
             texture_model,
             source_path,
             visibility,
+            display_name: None,
             cleanup_reason: "wardrobe texture insert failure",
         },
     )
@@ -1751,6 +1889,7 @@ where
             state.reader_db(),
             binding.texture.user_id,
             binding.texture.texture_type,
+            binding.texture.source,
             &binding.texture.hash,
             binding.texture.texture_model,
         )
@@ -1812,9 +1951,11 @@ where
 struct StoreTextureAssetInput<'a> {
     user_id: i64,
     texture_type: MinecraftTextureType,
+    source: MinecraftTextureSource,
     texture_model: MinecraftTextureModel,
     source_path: PathBuf,
     visibility: MinecraftTextureVisibility,
+    display_name: Option<&'a str>,
     cleanup_reason: &'a str,
 }
 
@@ -1828,9 +1969,11 @@ where
     let StoreTextureAssetInput {
         user_id,
         texture_type,
+        source,
         texture_model,
         source_path,
         visibility,
+        display_name,
         cleanup_reason,
     } = input;
     let policy = crate::config::yggdrasil::RuntimeYggdrasilPolicy::from_runtime_config(
@@ -1868,6 +2011,7 @@ where
         state.reader_db(),
         user_id,
         texture_type,
+        source,
         &processing.hash,
         texture_model,
     )
@@ -1907,6 +2051,7 @@ where
         minecraft_texture_repo::CreateMinecraftTexture {
             user_id,
             texture_type,
+            source,
             hash: &processing.hash,
             storage_key: &storage_key,
             mime_type: PNG_CONTENT_TYPE,
@@ -1916,7 +2061,7 @@ where
             texture_model,
             visibility,
             is_wardrobe_item: true,
-            display_name: None,
+            display_name,
         },
     )
     .await;
@@ -2108,6 +2253,7 @@ where
         state.reader_db(),
         user_id,
         source.texture_type,
+        MinecraftTextureSource::Local,
         &source.hash,
         source.texture_model,
     )
@@ -2253,7 +2399,10 @@ pub async fn bind_wardrobe_texture_to_profile<S>(
     texture_type: MinecraftTextureType,
 ) -> std::result::Result<StoredTexture, TextureError>
 where
-    S: CacheRuntimeState + DatabaseRuntimeState + ObjectStorageRuntimeState,
+    S: CacheRuntimeState
+        + DatabaseRuntimeState
+        + ObjectStorageRuntimeState
+        + RuntimeConfigRuntimeState,
 {
     ban_service::ensure_user_not_banned(state, user_id, UserBanScope::TextureUpload)
         .await
@@ -2268,7 +2417,10 @@ where
         texture_type = ?texture_type,
         "binding wardrobe texture to profile"
     );
-    ensure_profile_texture_mutation_allowed(profile)?;
+    let policy = crate::config::yggdrasil::RuntimeYggdrasilPolicy::from_runtime_config(
+        state.runtime_config(),
+    );
+    ensure_profile_texture_mutation_allowed(&policy, profile)?;
     ensure_upload_allowed(profile, texture_type)?;
     let Some(wardrobe_texture) = minecraft_texture_repo::find_by_id_for_user(
         state.reader_db(),
@@ -2307,6 +2459,7 @@ where
     )
     .await
     .map_err(TextureError::from)?;
+    remember_local_texture_preset(state, profile, &texture.texture).await?;
 
     if let Some(previous) = previous.as_ref()
         && previous.texture.id != texture.texture.id
@@ -2334,13 +2487,40 @@ where
     })
 }
 
+async fn remember_local_texture_preset<S>(
+    state: &S,
+    profile: &minecraft_profile::Model,
+    texture: &minecraft_texture::Model,
+) -> std::result::Result<(), TextureError>
+where
+    S: DatabaseRuntimeState,
+{
+    if texture.source != MinecraftTextureSource::Local || !texture.is_wardrobe_item {
+        return Ok(());
+    }
+    minecraft_profile_texture_preference_repo::upsert(
+        state.writer_db(),
+        minecraft_profile_texture_preference_repo::UpsertMinecraftProfileTexturePreference {
+            profile_id: profile.id,
+            texture_type: texture.texture_type,
+            texture_id: texture.id,
+        },
+    )
+    .await
+    .map_err(TextureError::from)?;
+    Ok(())
+}
+
 pub async fn delete_texture<S>(
     state: &S,
     profile: &minecraft_profile::Model,
     texture_type: MinecraftTextureType,
 ) -> std::result::Result<Option<minecraft_profile_texture_repo::ProfileTexture>, TextureError>
 where
-    S: CacheRuntimeState + DatabaseRuntimeState + ObjectStorageRuntimeState,
+    S: CacheRuntimeState
+        + DatabaseRuntimeState
+        + ObjectStorageRuntimeState
+        + RuntimeConfigRuntimeState,
 {
     ban_service::ensure_user_not_banned(state, profile.user_id, UserBanScope::TextureUpload)
         .await
@@ -2357,7 +2537,10 @@ where
         texture_type = ?texture_type,
         "deleting profile texture"
     );
-    ensure_profile_texture_mutation_allowed(profile)?;
+    let policy = crate::config::yggdrasil::RuntimeYggdrasilPolicy::from_runtime_config(
+        state.runtime_config(),
+    );
+    ensure_profile_texture_mutation_allowed(&policy, profile)?;
     ensure_upload_allowed(profile, texture_type)?;
     let deleted = minecraft_profile_texture_repo::delete_for_profile(
         state.writer_db(),
@@ -2388,7 +2571,10 @@ pub async fn delete_texture_for_profile<S>(
     texture_type: MinecraftTextureType,
 ) -> std::result::Result<Option<DeletedMinecraftTexture>, TextureError>
 where
-    S: CacheRuntimeState + DatabaseRuntimeState + ObjectStorageRuntimeState,
+    S: CacheRuntimeState
+        + DatabaseRuntimeState
+        + ObjectStorageRuntimeState
+        + RuntimeConfigRuntimeState,
 {
     let deleted = delete_texture(state, profile, texture_type).await?;
     Ok(deleted.map(|texture| DeletedMinecraftTexture {
@@ -2435,6 +2621,36 @@ where
         texture,
         profile: profile.clone(),
     }))
+}
+
+pub async fn delete_official_texture_for_profile_if_bound<S>(
+    state: &S,
+    profile: &minecraft_profile::Model,
+    texture_type: MinecraftTextureType,
+) -> std::result::Result<Option<DeletedMinecraftTexture>, TextureError>
+where
+    S: CacheRuntimeState + DatabaseRuntimeState + ObjectStorageRuntimeState,
+{
+    let current = minecraft_profile_texture_repo::find_by_profile_and_type(
+        state.reader_db(),
+        profile.id,
+        texture_type,
+    )
+    .await
+    .map_err(TextureError::from)?;
+    let should_delete = current
+        .as_ref()
+        .is_some_and(|current| current.texture.source == MinecraftTextureSource::Mojang);
+    if !should_delete {
+        tracing::debug!(
+            profile_id = profile.id,
+            texture_type = ?texture_type,
+            current_texture_id = current.as_ref().map(|current| current.texture.id),
+            "skipping official texture deletion because current profile texture is local"
+        );
+        return Ok(None);
+    }
+    delete_texture_for_profile_unchecked(state, profile, texture_type).await
 }
 
 pub async fn delete_textures_by_hash<S>(
@@ -2596,9 +2812,12 @@ fn ensure_upload_allowed(
 }
 
 fn ensure_profile_texture_mutation_allowed(
+    policy: &crate::config::yggdrasil::RuntimeYggdrasilPolicy,
     profile: &minecraft_profile::Model,
 ) -> std::result::Result<(), TextureError> {
-    if profile.source == MinecraftProfileSource::Microsoft {
+    if profile.source == MinecraftProfileSource::Microsoft
+        && !policy.allow_microsoft_profile_texture_override
+    {
         tracing::debug!(
             profile_id = profile.id,
             profile_uuid = %profile.uuid,
@@ -2607,6 +2826,13 @@ fn ensure_profile_texture_mutation_allowed(
         return Err(TextureError::new(TextureErrorKind::UploadDisabled));
     }
     Ok(())
+}
+
+fn official_texture_display_name(texture_type: MinecraftTextureType) -> &'static str {
+    match texture_type {
+        MinecraftTextureType::Skin => "Official Minecraft skin",
+        MinecraftTextureType::Cape => "Official Minecraft cape",
+    }
 }
 
 fn object_storage_key(hash: &str) -> String {

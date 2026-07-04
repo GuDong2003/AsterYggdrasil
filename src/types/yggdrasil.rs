@@ -147,6 +147,26 @@ impl MinecraftTextureType {
 #[cfg_attr(all(debug_assertions, feature = "openapi"), derive(ToSchema))]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::N(16))")]
 #[serde(rename_all = "snake_case")]
+pub enum MinecraftTextureSource {
+    #[sea_orm(string_value = "local")]
+    Local,
+    #[sea_orm(string_value = "mojang")]
+    Mojang,
+}
+
+impl MinecraftTextureSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Mojang => "mojang",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[cfg_attr(all(debug_assertions, feature = "openapi"), derive(ToSchema))]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::N(16))")]
+#[serde(rename_all = "snake_case")]
 pub enum MinecraftTextureVisibility {
     #[sea_orm(string_value = "private")]
     Private,

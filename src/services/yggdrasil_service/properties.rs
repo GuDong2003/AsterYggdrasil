@@ -63,22 +63,22 @@ where
         signed,
         "added yggdrasil textures property"
     );
-    if !profile.uploadable_textures.trim().is_empty() {
+    if let Some(uploadable_textures) = uploadable_textures_property_value(&policy, profile) {
         let signature = if signed {
-            yggdrasil_signature::sign_texture_property(&policy, &profile.uploadable_textures)
+            yggdrasil_signature::sign_texture_property(&policy, uploadable_textures)
                 .map_err(YggdrasilError::from)?
         } else {
             None
         };
         properties.push(YggdrasilProfileProperty {
             name: "uploadableTextures".to_string(),
-            value: profile.uploadable_textures.clone(),
+            value: uploadable_textures.to_string(),
             signature,
         });
         tracing::debug!(
             profile_id = profile.id,
             signed,
-            uploadable_textures = %profile.uploadable_textures,
+            uploadable_textures = %uploadable_textures,
             "added yggdrasil uploadableTextures property"
         );
     }
@@ -195,4 +195,17 @@ fn texture_property_value(
             AsterError::internal_error(format!("failed to serialize textures property: {error}"))
         })?;
     Ok(encoded)
+}
+
+fn uploadable_textures_property_value<'a>(
+    policy: &RuntimeYggdrasilPolicy,
+    profile: &'a minecraft_profile::Model,
+) -> Option<&'a str> {
+    if profile.source == crate::types::yggdrasil::MinecraftProfileSource::Microsoft
+        && !policy.allow_microsoft_profile_texture_override
+    {
+        return None;
+    }
+    let value = profile.uploadable_textures.trim();
+    (!value.is_empty()).then_some(value)
 }

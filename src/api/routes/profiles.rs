@@ -35,6 +35,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::post().to(refresh_official_minecraft_profile_textures),
             )
             .route(
+                "/minecraft/{uuid}/texture-source/official",
+                web::post().to(apply_official_minecraft_profile_texture_source),
+            )
+            .route(
+                "/minecraft/{uuid}/texture-source/local",
+                web::post().to(apply_local_minecraft_profile_texture_source),
+            )
+            .route(
                 "/minecraft/{uuid}/textures/{texture_type}",
                 web::put().to(bind_minecraft_profile_texture),
             )
@@ -559,6 +567,132 @@ pub async fn refresh_official_minecraft_profile_textures(
         profile_uuid = %profile.uuid,
         texture_count = textures.len(),
         "current user official minecraft profile textures refreshed"
+    );
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(textures)))
+}
+
+#[aster_forge_api_docs_macros::path(
+    post,
+    path = "/api/v1/profiles/minecraft/{uuid}/texture-source/official",
+    tag = "profiles",
+    operation_id = "apply_current_user_official_minecraft_profile_texture_source",
+    params(("uuid" = String, Path, description = "Unsigned Minecraft profile UUID")),
+    responses(
+        (status = 200, description = "Official Minecraft texture source applied", body = inline(ApiResponse<Vec<texture_service::MinecraftTextureMetadata>>)),
+        (status = 400, description = "Invalid profile UUID or Mojang lookup failed"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Profile is not an official Microsoft profile"),
+        (status = 404, description = "Profile not found"),
+    ),
+    security(("bearer" = [])),
+)]
+pub async fn apply_official_minecraft_profile_texture_source(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> Result<HttpResponse> {
+    let uuid = path.into_inner();
+    tracing::debug!(
+        profile_uuid = %uuid,
+        "received current user official minecraft profile texture source apply request"
+    );
+    if let Err(error) = validate_unsigned_uuid(&uuid) {
+        tracing::debug!(
+            profile_uuid = %uuid,
+            "official minecraft profile texture source apply rejected invalid profile uuid"
+        );
+        return Err(AsterError::validation_error_code(
+            AsterErrorCode::MinecraftProfileUuidInvalid,
+            error.message.unwrap_or_default(),
+        ));
+    }
+    let user = auth_service::current_user(state.get_ref(), &req).await?;
+    let Some(profile) =
+        minecraft_profile_repo::find_by_uuid_for_user(state.get_ref().reader_db(), &uuid, user.id)
+            .await?
+    else {
+        tracing::debug!(
+            user_id = user.id,
+            profile_uuid = %uuid,
+            "official minecraft profile texture source apply rejected missing profile"
+        );
+        return Err(AsterError::record_not_found_code(
+            AsterErrorCode::MinecraftProfileNotFound,
+            format!("minecraft profile '{uuid}'"),
+        ));
+    };
+    let textures =
+        yggdrasil_service::apply_official_profile_textures(state.get_ref(), &profile).await?;
+    tracing::debug!(
+        user_id = user.id,
+        profile_id = profile.id,
+        profile_uuid = %profile.uuid,
+        texture_count = textures.len(),
+        "current user official minecraft profile texture source applied"
+    );
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(textures)))
+}
+
+#[aster_forge_api_docs_macros::path(
+    post,
+    path = "/api/v1/profiles/minecraft/{uuid}/texture-source/local",
+    tag = "profiles",
+    operation_id = "apply_current_user_local_minecraft_profile_texture_source",
+    params(("uuid" = String, Path, description = "Unsigned Minecraft profile UUID")),
+    responses(
+        (status = 200, description = "Local skin-site texture source applied", body = inline(ApiResponse<Vec<texture_service::MinecraftTextureMetadata>>)),
+        (status = 400, description = "Invalid profile UUID"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Profile is not allowed to use local textures"),
+        (status = 404, description = "Profile or local texture preset not found"),
+    ),
+    security(("bearer" = [])),
+)]
+pub async fn apply_local_minecraft_profile_texture_source(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> Result<HttpResponse> {
+    let uuid = path.into_inner();
+    tracing::debug!(
+        profile_uuid = %uuid,
+        "received current user local minecraft profile texture source apply request"
+    );
+    if let Err(error) = validate_unsigned_uuid(&uuid) {
+        tracing::debug!(
+            profile_uuid = %uuid,
+            "local minecraft profile texture source apply rejected invalid profile uuid"
+        );
+        return Err(AsterError::validation_error_code(
+            AsterErrorCode::MinecraftProfileUuidInvalid,
+            error.message.unwrap_or_default(),
+        ));
+    }
+    let user = auth_service::current_user(state.get_ref(), &req).await?;
+    let Some(profile) =
+        minecraft_profile_repo::find_by_uuid_for_user(state.get_ref().reader_db(), &uuid, user.id)
+            .await?
+    else {
+        tracing::debug!(
+            user_id = user.id,
+            profile_uuid = %uuid,
+            "local minecraft profile texture source apply rejected missing profile"
+        );
+        return Err(AsterError::record_not_found_code(
+            AsterErrorCode::MinecraftProfileNotFound,
+            format!("minecraft profile '{uuid}'"),
+        ));
+    };
+    let textures =
+        texture_service::apply_local_texture_presets_to_profile(state.get_ref(), user.id, &profile)
+            .await
+            .map_err(texture_error_to_api_error)?;
+    tracing::debug!(
+        user_id = user.id,
+        profile_id = profile.id,
+        profile_uuid = %profile.uuid,
+        texture_count = textures.len(),
+        "current user local minecraft profile texture source applied"
     );
     Ok(HttpResponse::Ok().json(ApiResponse::ok(textures)))
 }

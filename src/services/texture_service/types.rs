@@ -7,7 +7,8 @@ use crate::services::profile_service::AvatarInfo;
 use crate::types::{
     yggdrasil::MinecraftTextureLibraryStatus, yggdrasil::MinecraftTextureModel,
     yggdrasil::MinecraftTextureReportReason, yggdrasil::MinecraftTextureReportStatus,
-    yggdrasil::MinecraftTextureType, yggdrasil::MinecraftTextureVisibility,
+    yggdrasil::MinecraftTextureSource, yggdrasil::MinecraftTextureType,
+    yggdrasil::MinecraftTextureVisibility,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -51,6 +52,7 @@ pub struct MinecraftTextureMetadata {
     pub url: String,
     pub preview_url: Option<String>,
     pub source: MinecraftTextureMetadataSource,
+    pub texture_source: Option<MinecraftTextureSource>,
     #[cfg_attr(all(debug_assertions, feature = "openapi"), schema(value_type = String))]
     pub created_at: chrono::DateTime<chrono::Utc>,
     #[cfg_attr(all(debug_assertions, feature = "openapi"), schema(value_type = String))]
@@ -80,6 +82,7 @@ pub struct MinecraftWardrobeTextureMetadata {
     pub mime_type: String,
     pub url: String,
     pub preview_url: Option<String>,
+    pub texture_source: MinecraftTextureSource,
     #[cfg_attr(all(debug_assertions, feature = "openapi"), schema(value_type = String))]
     pub created_at: chrono::DateTime<chrono::Utc>,
     #[cfg_attr(all(debug_assertions, feature = "openapi"), schema(value_type = String))]

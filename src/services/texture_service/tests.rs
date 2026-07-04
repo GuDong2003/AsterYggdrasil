@@ -4,6 +4,8 @@ use crate::db::repository::{
 };
 use crate::runtime::AppState;
 use crate::types::user::UserRole;
+use crate::types::yggdrasil::MinecraftProfileSource;
+use aster_forge_config::{ConfigSource, ConfigValueType, ConfigVisibility};
 use sha2::Digest;
 use std::io::Cursor;
 use std::sync::Arc;
@@ -80,6 +82,7 @@ async fn create_profile_texture_asset(
         minecraft_texture_repo::CreateMinecraftTexture {
             user_id,
             texture_type,
+            source: crate::types::yggdrasil::MinecraftTextureSource::Local,
             hash,
             storage_key,
             mime_type: "image/png",
@@ -104,6 +107,336 @@ async fn create_profile_texture_asset(
     )
     .await
     .unwrap();
+}
+
+async fn create_wardrobe_texture(
+    state: &AppState,
+    user_id: i64,
+    texture_type: MinecraftTextureType,
+    hash: &str,
+    storage_key: &str,
+) -> minecraft_texture::Model {
+    create_wardrobe_texture_with_source(
+        state,
+        user_id,
+        texture_type,
+        crate::types::yggdrasil::MinecraftTextureSource::Local,
+        hash,
+        storage_key,
+    )
+    .await
+}
+
+async fn create_wardrobe_texture_with_source(
+    state: &AppState,
+    user_id: i64,
+    texture_type: MinecraftTextureType,
+    source: crate::types::yggdrasil::MinecraftTextureSource,
+    hash: &str,
+    storage_key: &str,
+) -> minecraft_texture::Model {
+    minecraft_texture_repo::create(
+        state.writer_db(),
+        minecraft_texture_repo::CreateMinecraftTexture {
+            user_id,
+            texture_type,
+            source,
+            hash,
+            storage_key,
+            mime_type: "image/png",
+            file_size: 1,
+            width: 64,
+            height: 64,
+            texture_model: MinecraftTextureModel::Default,
+            visibility: MinecraftTextureVisibility::Private,
+            is_wardrobe_item: true,
+            display_name: Some("Test texture"),
+        },
+    )
+    .await
+    .unwrap()
+}
+
+fn system_config_model(key: &str, value: &str) -> aster_forge_db::system_config::Model {
+    aster_forge_db::system_config::Model {
+        id: 1,
+        key: key.to_string(),
+        value: value.to_string(),
+        value_type: ConfigValueType::String,
+        requires_restart: false,
+        is_sensitive: false,
+        source: ConfigSource::System,
+        visibility: ConfigVisibility::Private,
+        namespace: String::new(),
+        category: String::new(),
+        description: String::new(),
+        updated_at: chrono::Utc::now(),
+        updated_by: None,
+    }
+}
+
+#[tokio::test]
+async fn microsoft_profile_texture_override_policy_controls_binding() {
+    let root = std::env::temp_dir().join(format!(
+        "asteryggdrasil-microsoft-profile-textures-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let state = test_state(root.to_string_lossy().to_string()).await;
+    let user = user_repo::create(
+        state.writer_db(),
+        "microsoft-texture-user",
+        "microsoft-texture@example.com",
+        "password-hash",
+        UserRole::User,
+    )
+    .await
+    .unwrap();
+    let profile = minecraft_profile_repo::create_with_source(
+        state.writer_db(),
+        user.id,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "OfficialSkin",
+        MinecraftProfileSource::Microsoft,
+        MinecraftTextureModel::Default,
+        "skin,cape",
+    )
+    .await
+    .unwrap();
+    let texture = create_wardrobe_texture(
+        &state,
+        user.id,
+        MinecraftTextureType::Skin,
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "cc/test.png",
+    )
+    .await;
+
+    state.runtime_config.apply(system_config_model(
+        crate::config::definitions::YGGDRASIL_ALLOW_MICROSOFT_PROFILE_TEXTURE_OVERRIDE_KEY,
+        "false",
+    ));
+
+    let rejected = bind_wardrobe_texture_to_profile(
+        &state,
+        user.id,
+        &profile,
+        texture.id,
+        MinecraftTextureType::Skin,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(rejected.kind(), TextureErrorKind::UploadDisabled);
+
+    state.runtime_config.apply(system_config_model(
+        crate::config::definitions::YGGDRASIL_ALLOW_MICROSOFT_PROFILE_TEXTURE_OVERRIDE_KEY,
+        "true",
+    ));
+
+    let stored = bind_wardrobe_texture_to_profile(
+        &state,
+        user.id,
+        &profile,
+        texture.id,
+        MinecraftTextureType::Skin,
+    )
+    .await
+    .unwrap();
+    assert_eq!(stored.profile.id, profile.id);
+    assert_eq!(stored.texture.texture.id, texture.id);
+
+    if let Err(error) = tokio::fs::remove_dir_all(root).await {
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+}
+
+#[tokio::test]
+async fn official_texture_delete_keeps_local_profile_texture() {
+    let root = std::env::temp_dir().join(format!(
+        "asteryggdrasil-official-texture-delete-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let state = test_state(root.to_string_lossy().to_string()).await;
+    let user = user_repo::create(
+        state.writer_db(),
+        "official-delete-user",
+        "official-delete@example.com",
+        "password-hash",
+        UserRole::User,
+    )
+    .await
+    .unwrap();
+    let profile = minecraft_profile_repo::create_with_source(
+        state.writer_db(),
+        user.id,
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "OfficialDelete",
+        MinecraftProfileSource::Microsoft,
+        MinecraftTextureModel::Default,
+        "skin,cape",
+    )
+    .await
+    .unwrap();
+    let local_texture = create_wardrobe_texture(
+        &state,
+        user.id,
+        MinecraftTextureType::Cape,
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "dd/local.png",
+    )
+    .await;
+    minecraft_profile_texture_repo::upsert_for_profile(
+        state.writer_db(),
+        minecraft_profile_texture_repo::UpsertMinecraftProfileTexture {
+            profile_id: profile.id,
+            texture_id: local_texture.id,
+            texture_type: MinecraftTextureType::Cape,
+        },
+    )
+    .await
+    .unwrap();
+
+    let skipped =
+        delete_official_texture_for_profile_if_bound(&state, &profile, MinecraftTextureType::Cape)
+            .await
+            .unwrap();
+    assert!(skipped.is_none());
+    let current = minecraft_profile_texture_repo::find_by_profile_and_type(
+        state.reader_db(),
+        profile.id,
+        MinecraftTextureType::Cape,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(current.texture.id, local_texture.id);
+
+    let mojang_texture = create_wardrobe_texture_with_source(
+        &state,
+        user.id,
+        MinecraftTextureType::Cape,
+        crate::types::yggdrasil::MinecraftTextureSource::Mojang,
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ee/mojang.png",
+    )
+    .await;
+    minecraft_profile_texture_repo::upsert_for_profile(
+        state.writer_db(),
+        minecraft_profile_texture_repo::UpsertMinecraftProfileTexture {
+            profile_id: profile.id,
+            texture_id: mojang_texture.id,
+            texture_type: MinecraftTextureType::Cape,
+        },
+    )
+    .await
+    .unwrap();
+
+    let deleted =
+        delete_official_texture_for_profile_if_bound(&state, &profile, MinecraftTextureType::Cape)
+            .await
+            .unwrap();
+    assert!(deleted.is_some());
+    let current = minecraft_profile_texture_repo::find_by_profile_and_type(
+        state.reader_db(),
+        profile.id,
+        MinecraftTextureType::Cape,
+    )
+    .await
+    .unwrap();
+    assert!(current.is_none());
+
+    if let Err(error) = tokio::fs::remove_dir_all(root).await {
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+}
+
+#[tokio::test]
+async fn local_texture_preset_rebinds_last_custom_texture() {
+    let root = std::env::temp_dir().join(format!(
+        "asteryggdrasil-local-texture-preset-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let state = test_state(root.to_string_lossy().to_string()).await;
+    let user = user_repo::create(
+        state.writer_db(),
+        "local-preset-user",
+        "local-preset@example.com",
+        "password-hash",
+        UserRole::User,
+    )
+    .await
+    .unwrap();
+    let profile = minecraft_profile_repo::create_with_source(
+        state.writer_db(),
+        user.id,
+        "ffffffffffffffffffffffffffffffff",
+        "LocalPreset",
+        MinecraftProfileSource::Microsoft,
+        MinecraftTextureModel::Default,
+        "skin,cape",
+    )
+    .await
+    .unwrap();
+    let local_texture = create_wardrobe_texture(
+        &state,
+        user.id,
+        MinecraftTextureType::Skin,
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "11/local.png",
+    )
+    .await;
+    let mojang_texture = create_wardrobe_texture_with_source(
+        &state,
+        user.id,
+        MinecraftTextureType::Skin,
+        crate::types::yggdrasil::MinecraftTextureSource::Mojang,
+        "2222222222222222222222222222222222222222222222222222222222222222",
+        "22/mojang.png",
+    )
+    .await;
+
+    bind_wardrobe_texture_to_profile(
+        &state,
+        user.id,
+        &profile,
+        local_texture.id,
+        MinecraftTextureType::Skin,
+    )
+    .await
+    .unwrap();
+    minecraft_profile_texture_repo::upsert_for_profile(
+        state.writer_db(),
+        minecraft_profile_texture_repo::UpsertMinecraftProfileTexture {
+            profile_id: profile.id,
+            texture_id: mojang_texture.id,
+            texture_type: MinecraftTextureType::Skin,
+        },
+    )
+    .await
+    .unwrap();
+
+    let textures = apply_local_texture_presets_to_profile(&state, user.id, &profile)
+        .await
+        .unwrap();
+    let current = minecraft_profile_texture_repo::find_by_profile_and_type(
+        state.reader_db(),
+        profile.id,
+        MinecraftTextureType::Skin,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(current.texture.id, local_texture.id);
+    assert!(
+        textures
+            .iter()
+            .any(|texture| texture.texture_id == local_texture.id
+                && texture.texture_source
+                    == Some(crate::types::yggdrasil::MinecraftTextureSource::Local))
+    );
+
+    if let Err(error) = tokio::fs::remove_dir_all(root).await {
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
 }
 
 #[tokio::test]

@@ -40,6 +40,7 @@ pub struct PublicYggdrasilConfig {
     pub allow_profile_name_login: bool,
     pub allow_skin_upload: bool,
     pub allow_cape_upload: bool,
+    pub allow_microsoft_profile_texture_override: bool,
     pub max_texture_upload_bytes: u64,
     pub max_texture_pixels: u64,
 }
@@ -100,6 +101,7 @@ pub fn get_public_yggdrasil_config(
         allow_profile_name_login: policy.allow_profile_name_login,
         allow_skin_upload: policy.allow_skin_upload,
         allow_cape_upload: policy.allow_cape_upload,
+        allow_microsoft_profile_texture_override: policy.allow_microsoft_profile_texture_override,
         max_texture_upload_bytes: policy.max_texture_upload_bytes,
         max_texture_pixels: policy.max_texture_pixels,
     }

@@ -659,6 +659,7 @@ mod tests {
             minecraft_texture_repo::CreateMinecraftTexture {
                 user_id,
                 texture_type: MinecraftTextureType::Skin,
+                source: crate::types::yggdrasil::MinecraftTextureSource::Local,
                 hash,
                 storage_key: hash,
                 mime_type: "image/png",
@@ -684,6 +685,7 @@ mod tests {
         minecraft_texture::ActiveModel {
             user_id: Set(user_id),
             texture_type: Set(MinecraftTextureType::Skin),
+            source: Set(crate::types::yggdrasil::MinecraftTextureSource::Local),
             hash: Set(hash.to_string()),
             storage_key: Set(hash.to_string()),
             mime_type: Set("image/png".to_string()),

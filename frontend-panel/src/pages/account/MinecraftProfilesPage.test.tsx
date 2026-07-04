@@ -8,9 +8,11 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import MinecraftProfilesPage from "@/pages/account/MinecraftProfilesPage";
 import { ApiError } from "@/services/http";
+import { useFrontendConfigStore } from "@/stores/frontendConfigStore";
 import type {
 	MinecraftTextureMetadata,
 	MinecraftWardrobeTextureMetadata,
+	PublicYggdrasilConfig,
 	YggdrasilProfile,
 	YggdrasilProfilePage,
 } from "@/types/api";
@@ -21,6 +23,8 @@ const toastMock = vi.hoisted(() => ({
 }));
 
 const yggdrasilServiceMock = vi.hoisted(() => ({
+	applyLocalProfileTextureSource: vi.fn(),
+	applyOfficialProfileTextureSource: vi.fn(),
 	bindProfileTexture: vi.fn(),
 	createProfile: vi.fn(),
 	deleteProfile: vi.fn(),
@@ -116,6 +120,7 @@ function texture(
 		profile_name: "Profile One",
 		profile_uuid: "profile-one",
 		source: "bound",
+		texture_source: "local",
 		texture_model: "default",
 		texture_type: "skin",
 		updated_at: "2026-01-01T00:00:00Z",
@@ -138,6 +143,7 @@ function uploadedTexture(
 		id: 42,
 		texture_model: "default",
 		texture_type: "skin",
+		texture_source: "local",
 		url: "/uploaded.png",
 		width: 64,
 		...overrides,
@@ -247,9 +253,29 @@ function openDeleteProfileDialog(profileId = "profile-one") {
 	return topDialog();
 }
 
+function frontendYggdrasilConfig(
+	allowMicrosoftProfileTextureOverride = true,
+): PublicYggdrasilConfig {
+	return {
+		allow_cape_upload: true,
+		allow_microsoft_profile_texture_override:
+			allowMicrosoftProfileTextureOverride,
+		allow_profile_name_login: true,
+		allow_skin_upload: true,
+		max_texture_pixels: 4096 * 4096,
+		max_texture_upload_bytes: 4 * 1024 * 1024,
+		public_base_urls: ["https://example.test/api/yggdrasil"],
+		server_name: "AsterYggdrasil",
+		skin_domains: ["example.test"],
+	};
+}
+
 describe("MinecraftProfilesPage", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		useFrontendConfigStore.setState({
+			yggdrasil: frontendYggdrasilConfig(),
+		});
 		yggdrasilServiceMock.listProfiles.mockResolvedValue(
 			cursorPage(baseProfiles),
 		);
@@ -271,6 +297,10 @@ describe("MinecraftProfilesPage", () => {
 		yggdrasilServiceMock.bindProfileTexture.mockResolvedValue(texture());
 		yggdrasilServiceMock.unbindProfileTexture.mockResolvedValue(undefined);
 		yggdrasilServiceMock.refreshOfficialProfileTextures.mockResolvedValue([]);
+		yggdrasilServiceMock.applyOfficialProfileTextureSource.mockResolvedValue(
+			[],
+		);
+		yggdrasilServiceMock.applyLocalProfileTextureSource.mockResolvedValue([]);
 	});
 
 	it("loads the first page with default page size 5 and selects the first profile", async () => {
@@ -302,6 +332,9 @@ describe("MinecraftProfilesPage", () => {
 	});
 
 	it("marks official Microsoft profiles and only exposes official texture refresh", async () => {
+		useFrontendConfigStore.setState({
+			yggdrasil: frontendYggdrasilConfig(false),
+		});
 		yggdrasilServiceMock.listProfiles.mockResolvedValueOnce(
 			cursorPage([
 				profile("official-profile", "Notch", { source: "microsoft" }),
@@ -363,6 +396,114 @@ describe("MinecraftProfilesPage", () => {
 		).not.toBeDisabled();
 	});
 
+	it("allows local texture management for Microsoft profiles when enabled", async () => {
+		useFrontendConfigStore.setState({
+			yggdrasil: frontendYggdrasilConfig(true),
+		});
+		yggdrasilServiceMock.listProfiles.mockResolvedValue(
+			cursorPage([
+				profile("official-profile", "Notch", { source: "microsoft" }),
+			]),
+		);
+		yggdrasilServiceMock.listProfileSkinTextureUrls.mockResolvedValue({
+			"official-profile": null,
+		});
+
+		render(<MinecraftProfilesPage />);
+
+		await screen.findAllByText("Notch");
+		const officialRow = rowFor("Notch");
+		await within(officialRow).findByTestId(
+			"profile-textures-action-official-profile",
+		);
+		expect(
+			within(officialRow).getByTestId(
+				"profile-refresh-official-textures-action-official-profile",
+			),
+		).toBeVisible();
+		expect(
+			within(officialRow).queryByTestId(
+				"profile-rename-action-official-profile",
+			),
+		).not.toBeInTheDocument();
+		expect(
+			within(officialRow).queryByTestId(
+				"profile-delete-action-official-profile",
+			),
+		).not.toBeInTheDocument();
+	});
+
+	it("switches Microsoft profiles between official and local texture sources", async () => {
+		yggdrasilServiceMock.listProfiles.mockResolvedValue(
+			cursorPage([
+				profile("official-profile", "Notch", { source: "microsoft" }),
+			]),
+		);
+		yggdrasilServiceMock.listProfileSkinTextureUrls.mockResolvedValue({
+			"official-profile": "/textures/custom.png",
+		});
+		yggdrasilServiceMock.listProfileTextures.mockResolvedValue([
+			texture({
+				profile_uuid: "official-profile",
+				texture_source: "local",
+				url: "/textures/custom.png",
+			}),
+		]);
+		yggdrasilServiceMock.applyOfficialProfileTextureSource.mockResolvedValueOnce(
+			[
+				texture({
+					profile_uuid: "official-profile",
+					texture_source: "mojang",
+					url: "/textures/official.png",
+				}),
+			],
+		);
+		yggdrasilServiceMock.applyLocalProfileTextureSource.mockResolvedValueOnce([
+			texture({
+				profile_uuid: "official-profile",
+				texture_source: "local",
+				url: "/textures/custom.png",
+			}),
+		]);
+
+		render(<MinecraftProfilesPage />);
+		await screen.findByTestId("profile-textures-action-official-profile");
+		fireEvent.click(
+			screen.getByTestId("profile-textures-action-official-profile"),
+		);
+		const dialog = topDialog();
+		expect(
+			within(dialog).getByText("profiles.textureSourceLocalActive"),
+		).toBeVisible();
+
+		fireEvent.click(
+			within(dialog).getByRole("button", {
+				name: /profiles\.textureSourceOfficialAction/,
+			}),
+		);
+		await waitFor(() => {
+			expect(
+				yggdrasilServiceMock.applyOfficialProfileTextureSource,
+			).toHaveBeenCalledWith("official-profile");
+		});
+		await waitFor(() => {
+			expect(toastMock.success).toHaveBeenCalledWith(
+				"profiles.officialTextureSourceApplySuccess",
+			);
+		});
+
+		fireEvent.click(
+			within(dialog).getByRole("button", {
+				name: /profiles\.textureSourceLocalAction/,
+			}),
+		);
+		await waitFor(() => {
+			expect(
+				yggdrasilServiceMock.applyLocalProfileTextureSource,
+			).toHaveBeenCalledWith("official-profile");
+		});
+	});
+
 	it("keeps the left table scoped to profile names and row actions", async () => {
 		await renderPage();
 
@@ -375,9 +516,8 @@ describe("MinecraftProfilesPage", () => {
 			screen.queryByText("profiles.totalProfiles"),
 		).not.toBeInTheDocument();
 
-		const firstRow = rowFor("OldName");
 		await waitFor(() => {
-			const avatarImage = within(firstRow).getByTestId(
+			const avatarImage = screen.getByTestId(
 				"profile-skin-avatar-image-profile-one",
 			);
 			expect(avatarImage).toHaveAttribute(
@@ -386,6 +526,7 @@ describe("MinecraftProfilesPage", () => {
 			);
 			expect(avatarImage).toHaveAttribute("draggable", "false");
 		});
+		const firstRow = rowFor("OldName");
 		expect(
 			within(firstRow).getByTestId("profile-textures-action-profile-one"),
 		).toBeVisible();

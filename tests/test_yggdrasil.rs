@@ -5539,7 +5539,7 @@ async fn wardrobe_texture_upload_name_falls_back_when_missing_or_blank() {
 #[actix_web::test]
 async fn minecraft_texture_metadata_apis_list_current_user_and_admin_views() {
     let state = setup_yggdrasil().await;
-    let app = create_test_app!(state);
+    let app = create_test_app!(state.clone());
     let access = setup_admin!(app);
     let profile_id = create_profile!(&app, &access, "MetaSkin");
 
@@ -5632,6 +5632,25 @@ async fn minecraft_texture_metadata_apis_list_current_user_and_admin_views() {
         assert!(items[0]["created_at"].as_str().is_some());
         assert!(items[0]["updated_at"].as_str().is_some());
     }
+
+    state.runtime_config.apply(common::system_config_model(
+        YGGDRASIL_TEXTURE_PUBLIC_BASE_URL_KEY,
+        "https://cdn.example.test/textures",
+    ));
+    let req = test::TestRequest::get()
+        .uri(&format!("/api/v1/profiles/minecraft/{profile_id}/textures"))
+        .insert_header(common::bearer_header(&access))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = test::read_body_json(resp).await;
+    let items = body["data"]
+        .as_array()
+        .expect("textures should be an array");
+    assert_eq!(
+        items[0]["url"].as_str().unwrap(),
+        format!("http://localhost/api/yggdrasil/textures/{texture_hash}")
+    );
 
     let resp =
         upload_wardrobe_texture_req!(app, &access, "skin", Some("default"), &png_texture(64, 64));

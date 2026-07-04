@@ -19,7 +19,7 @@ pub use minecraft_services::{
     minecraft_services_player_attributes, minecraft_services_privacy_blocklist,
     minecraft_services_privileges, profile_key_certificate,
 };
-pub use mojang::refresh_official_profile_textures;
+pub use mojang::{apply_official_profile_textures, refresh_official_profile_textures};
 pub use profile::{
     DeleteMinecraftProfileResult, MinecraftProfileInfo, RenameMinecraftProfileResult,
     create_profile, create_profile_for_external_auth, create_profile_with_uuid_in_connection,

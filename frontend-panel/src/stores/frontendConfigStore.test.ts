@@ -82,9 +82,8 @@ describe("frontendConfigStore cache", () => {
 		const legacyConfig = JSON.parse(
 			JSON.stringify(frontendConfig),
 		) as PublicFrontendConfig;
-		delete (
-			legacyConfig.yggdrasil as Partial<PublicYggdrasilConfig>
-		).allow_microsoft_profile_texture_override;
+		delete (legacyConfig.yggdrasil as Partial<PublicYggdrasilConfig>)
+			.allow_microsoft_profile_texture_override;
 		localStorage.setItem(
 			STORAGE_KEYS.cachedFrontendConfig,
 			JSON.stringify({

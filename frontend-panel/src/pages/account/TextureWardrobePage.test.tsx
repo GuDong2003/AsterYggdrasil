@@ -102,6 +102,7 @@ function texture(
 		tags: [],
 		texture_model: "default",
 		texture_type: "skin",
+		texture_source: "local",
 		updated_at: "2026-01-01T00:00:00Z",
 		url: "/textures/skin.png",
 		visibility: "private",

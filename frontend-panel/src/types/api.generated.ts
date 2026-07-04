@@ -3171,6 +3171,7 @@ export interface components {
                 tags: components["schemas"]["MinecraftTextureTagInfo"][];
                 texture_model: components["schemas"]["MinecraftTextureModel"];
                 texture_type: components["schemas"]["MinecraftTextureType"];
+                texture_source: components["schemas"]["MinecraftTextureSource"];
                 updated_at: string;
                 url: string;
                 visibility: components["schemas"]["MinecraftTextureVisibility"];
@@ -12430,6 +12431,7 @@ export interface operations {
                                 tags: components["schemas"]["MinecraftTextureTagInfo"][];
                                 texture_model: components["schemas"]["MinecraftTextureModel"];
                                 texture_type: components["schemas"]["MinecraftTextureType"];
+                                texture_source: components["schemas"]["MinecraftTextureSource"];
                                 updated_at: string;
                                 url: string;
                                 visibility: components["schemas"]["MinecraftTextureVisibility"];

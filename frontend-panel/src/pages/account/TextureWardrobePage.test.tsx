@@ -5,6 +5,7 @@ import {
 	waitFor,
 	within,
 } from "@testing-library/react";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import TextureWardrobePage from "@/pages/account/TextureWardrobePage";
 import type {
@@ -186,8 +187,17 @@ function pngFile(width = 64, height = 64, name = "skin.png") {
 	return new File([bytes], name, { type: "image/png" });
 }
 
+function LocationProbe() {
+	return <span data-testid="location">{useLocation().pathname}</span>;
+}
+
 async function renderPage() {
-	render(<TextureWardrobePage />);
+	render(
+		<MemoryRouter>
+			<TextureWardrobePage />
+			<LocationProbe />
+		</MemoryRouter>,
+	);
 	await screen.findByTestId("minecraft-preview");
 }
 
@@ -280,6 +290,18 @@ describe("TextureWardrobePage", () => {
 			'img[src="/textures/skin.png"]',
 		);
 		expect(previewImage).toHaveAttribute("crossorigin", "anonymous");
+	});
+
+	it("opens the selected skin in the wardrobe editor", async () => {
+		await renderPage();
+
+		fireEvent.click(
+			screen.getByRole("button", { name: "wardrobe.editSkinAction" }),
+		);
+
+		expect(screen.getByTestId("location")).toHaveTextContent(
+			"/account/wardrobe/editor/7",
+		);
 	});
 
 	it("switches to cape filtering and passes the cape URL into MinecraftPreview", async () => {
@@ -471,7 +493,7 @@ describe("TextureWardrobePage", () => {
 		await renderPage();
 
 		fireEvent.click(
-			screen.getByRole("button", { name: "wardrobe.editAction" }),
+			screen.getByRole("button", { name: "wardrobe.propertiesAction" }),
 		);
 
 		await waitFor(() => {
@@ -500,7 +522,7 @@ describe("TextureWardrobePage", () => {
 		await renderPage();
 
 		fireEvent.click(
-			screen.getByRole("button", { name: "wardrobe.editAction" }),
+			screen.getByRole("button", { name: "wardrobe.propertiesAction" }),
 		);
 		const dialog = topDialog();
 		await waitFor(() => {
@@ -677,7 +699,7 @@ describe("TextureWardrobePage", () => {
 		await renderPage();
 
 		fireEvent.click(
-			screen.getByRole("button", { name: "wardrobe.editAction" }),
+			screen.getByRole("button", { name: "wardrobe.propertiesAction" }),
 		);
 		const dialog = topDialog();
 		expect(
@@ -742,7 +764,7 @@ describe("TextureWardrobePage", () => {
 		await renderPage();
 
 		fireEvent.click(
-			screen.getByRole("button", { name: "wardrobe.editAction" }),
+			screen.getByRole("button", { name: "wardrobe.propertiesAction" }),
 		);
 		const dialog = topDialog();
 		fireEvent.change(within(dialog).getByLabelText("wardrobe.textureName"), {
@@ -771,7 +793,7 @@ describe("TextureWardrobePage", () => {
 		await renderPage();
 
 		fireEvent.click(
-			screen.getByRole("button", { name: "wardrobe.editAction" }),
+			screen.getByRole("button", { name: "wardrobe.propertiesAction" }),
 		);
 
 		await waitFor(() => {
@@ -791,7 +813,7 @@ describe("TextureWardrobePage", () => {
 		await renderPage();
 
 		fireEvent.click(
-			screen.getByRole("button", { name: "wardrobe.editAction" }),
+			screen.getByRole("button", { name: "wardrobe.propertiesAction" }),
 		);
 		const dialog = topDialog();
 		fireEvent.change(within(dialog).getByLabelText("wardrobe.textureName"), {
@@ -818,7 +840,7 @@ describe("TextureWardrobePage", () => {
 		await renderPage();
 
 		fireEvent.click(
-			screen.getByRole("button", { name: "wardrobe.editAction" }),
+			screen.getByRole("button", { name: "wardrobe.propertiesAction" }),
 		);
 		const dialog = topDialog();
 		await waitFor(() => {

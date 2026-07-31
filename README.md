@@ -133,7 +133,9 @@ Site users can upload wardrobe textures first, then bind them to profiles:
 
 ```text
 GET    /api/v1/wardrobe/textures
+GET    /api/v1/wardrobe/textures/{texture_id}
 POST   /api/v1/wardrobe/textures/{skin|cape}
+PUT    /api/v1/wardrobe/textures/{texture_id}/content
 DELETE /api/v1/wardrobe/textures/{texture_id}
 PUT    /api/v1/profiles/minecraft/{uuid}/textures/{skin|cape}
 DELETE /api/v1/profiles/minecraft/{uuid}/textures/{skin|cape}
@@ -148,6 +150,8 @@ GET    /api/yggdrasil/textures/{hash}
 ```
 
 Uploads must be PNG files. The server validates MIME type, dimensions, upload policy, and profile ownership, then re-encodes the image as a sanitized PNG and hashes the processed bytes.
+
+The account wardrobe includes a browser skin editor for modern `64×64` skins and legacy `64×32` imports, with base/overlay layers, undo/redo, 3D pose preview, and real Steve/Alex UV conversion. Users can save an edit as a private copy or replace the original wardrobe content in place. In-place replacement keeps the texture ID, name, tags, visibility, and profile bindings; any public-library review state is reset so changed content cannot bypass moderation.
 
 Public texture library APIs let users publish and reuse wardrobe textures:
 
@@ -247,6 +251,7 @@ See [docs/deployment/docker.md](docs/deployment/docker.md) for full deployment n
 - Current deployment docs cover a single task owner. For multi-instance deployments, ensure externally that only one instance starts the full background task set.
 - The production object storage backend can be local, S3, or MinIO. Textures and uploaded avatars use the same backend.
 - For publicly readable S3/MinIO buckets or CDNs, `yggdrasil_texture_public_base_url` can make uploaded texture URLs point directly at object storage while default skins still use the Yggdrasil API.
+- If uploaded texture URLs use a different origin, configure that CDN or bucket to allow the panel origin through CORS; the browser skin editor must read the source PNG before it can edit it.
 
 ## Common Development Commands
 

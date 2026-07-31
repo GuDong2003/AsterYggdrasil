@@ -85,12 +85,20 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/tags", web::get().to(list_texture_library_tags))
             .route("/textures", web::get().to(list_wardrobe_textures))
             .route(
+                "/textures/{texture_id}",
+                web::get().to(get_wardrobe_texture),
+            )
+            .route(
                 "/textures/{texture_type}",
                 web::post().to(upload_wardrobe_texture),
             )
             .route(
                 "/textures/{texture_id}",
                 web::patch().to(update_wardrobe_texture),
+            )
+            .route(
+                "/textures/{texture_id}/content",
+                web::put().to(replace_wardrobe_texture_content),
             )
             .route(
                 "/textures/{texture_id}/tags",
@@ -174,6 +182,30 @@ pub async fn list_wardrobe_textures(
         "listed current user wardrobe textures cursor page"
     );
     Ok(HttpResponse::Ok().json(ApiResponse::ok(page)))
+}
+
+#[aster_forge_api_docs_macros::path(
+    get,
+    path = "/api/v1/wardrobe/textures/{texture_id}",
+    tag = "profiles",
+    operation_id = "get_current_user_wardrobe_texture",
+    params(("texture_id" = i64, Path, description = "Wardrobe texture ID")),
+    responses(
+        (status = 200, description = "Current user's wardrobe texture", body = inline(ApiResponse<texture_service::MinecraftWardrobeTextureMetadata>)),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Wardrobe texture not found"),
+    ),
+    security(("bearer" = [])),
+)]
+pub async fn get_wardrobe_texture(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+) -> Result<HttpResponse> {
+    let user = auth_service::current_user(state.get_ref(), &req).await?;
+    let texture =
+        texture_service::get_wardrobe_texture(state.get_ref(), user.id, path.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(texture)))
 }
 
 fn normalize_tag_filter_ids(tag_ids: &[i64]) -> Result<Vec<i64>> {
@@ -534,6 +566,80 @@ pub async fn upload_wardrobe_texture(
     .await;
 
     Ok(HttpResponse::Ok().json(ApiResponse::ok(response_texture)))
+}
+
+#[aster_forge_api_docs_macros::path(
+    put,
+    path = "/api/v1/wardrobe/textures/{texture_id}/content",
+    tag = "profiles",
+    operation_id = "replace_current_user_wardrobe_texture_content",
+    request_body(
+        content = String,
+        content_type = "multipart/form-data",
+        description = "Multipart form with PNG file field and optional skin model field"
+    ),
+    params(("texture_id" = i64, Path, description = "Wardrobe texture ID")),
+    responses(
+        (status = 200, description = "Wardrobe texture content replaced", body = inline(ApiResponse<texture_service::MinecraftWardrobeTextureMetadata>)),
+        (status = 400, description = "Invalid upload or texture"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Wardrobe texture not found"),
+    ),
+    security(("bearer" = [])),
+)]
+pub async fn replace_wardrobe_texture_content(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+    payload: Multipart,
+) -> Result<HttpResponse> {
+    let texture_id = path.into_inner();
+    let user = auth_service::current_user(state.get_ref(), &req).await?;
+    let previous =
+        texture_service::get_wardrobe_texture(state.get_ref(), user.id, texture_id).await?;
+    ban_service::ensure_user_not_banned(state.get_ref(), user.id, UserBanScope::TextureUpload)
+        .await?;
+    let upload = receive_texture_upload(&state, payload, previous.texture_type)
+        .await
+        .map_err(texture_error_to_api_error)?;
+    let replaced = texture_service::replace_wardrobe_texture_content(
+        state.get_ref(),
+        user.id,
+        texture_id,
+        upload.texture_model,
+        upload.file_path.clone(),
+    )
+    .await
+    .map_err(texture_error_to_api_error);
+    cleanup_upload_file(&upload.file_path).await;
+    let replaced = replaced?;
+
+    let ctx = audit_service::AuditContext::from_request(&req, user.id);
+    audit_service::log_with_details(
+        state.get_ref(),
+        &ctx,
+        audit_service::AuditAction::MinecraftTextureEdit,
+        audit_service::AuditEntityType::MinecraftTexture,
+        Some(replaced.id),
+        Some(&replaced.name),
+        || {
+            audit_service::details(audit_service::MinecraftTextureAuditDetails {
+                profile_uuid: "",
+                profile_name: "",
+                texture_type: replaced.texture_type,
+                texture_hash: Some(&replaced.hash),
+                texture_model: Some(replaced.texture_model),
+                width: Some(replaced.width),
+                height: Some(replaced.height),
+                file_size: Some(replaced.file_size),
+                library_status: Some(replaced.library_status),
+                review_note: replaced.library_review_note.as_deref(),
+            })
+        },
+    )
+    .await;
+
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(replaced)))
 }
 
 #[aster_forge_api_docs_macros::path(

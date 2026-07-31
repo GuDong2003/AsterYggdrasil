@@ -119,6 +119,8 @@ define_audit_actions! {
     YggdrasilSignout => "yggdrasil_signout",
     YggdrasilJoinServer => "yggdrasil_join_server",
     YggdrasilSessionForwardCheck => "yggdrasil_session_forward_check",
+    // Keep new actions appended so existing audit action indices stay stable.
+    MinecraftTextureEdit => "minecraft_texture_edit",
 }
 
 impl AsRef<str> for AuditAction {
@@ -161,6 +163,7 @@ impl AuditAction {
             | Self::MinecraftProfileRename
             | Self::MinecraftProfileDelete
             | Self::MinecraftTextureUpload
+            | Self::MinecraftTextureEdit
             | Self::MinecraftTextureBind
             | Self::MinecraftTextureDelete
             | Self::MinecraftTextureLibrarySubmit

@@ -257,6 +257,7 @@ const AUDIT_ACTION_TONES = {
 
 	mail_send: "success",
 	minecraft_profile_create: "success",
+	minecraft_texture_edit: "success",
 	minecraft_texture_upload: "success",
 	system_setup: "success",
 	user_register: "success",

@@ -239,6 +239,8 @@
 		"bindToProfile": "Bind to profile",
 		"bindAction": "Bind",
 		"editAction": "Edit",
+		"editSkinAction": "Edit skin",
+		"propertiesAction": "Properties",
 		"saving": "Working",
 		"deleteAction": "Delete",
 		"resetSelection": "Reset selected texture",
@@ -419,6 +421,109 @@
 		"passkeysDelete": "Delete",
 		"passkeysCreatedAt": "Created",
 		"passkeysUpdated": "Updated"
+	},
+	"skinEditor": {
+		"pageTitle": "Skin Pixel Editor",
+		"pageTitleWithName": "Edit {{name}}",
+		"title": "Skin Pixel Editor",
+		"backToWardrobe": "Back to wardrobe",
+		"unsaved": "Unsaved changes",
+		"saved": "Saved",
+		"import": "Import PNG",
+		"download": "Download PNG",
+		"saveCopy": "Save as copy",
+		"replaceOriginal": "Replace original",
+		"navigator": "Navigator",
+		"coordinates": "Current coordinates",
+		"zoomOut": "Zoom out",
+		"zoomIn": "Zoom in",
+		"layers": "Layers",
+		"hideOverlay": "Hide overlay",
+		"showOverlay": "Show overlay",
+		"file": "Canvas",
+		"newBlank": "Clear canvas",
+		"color": "Brush color",
+		"brushSize": "Size",
+		"grid": "Grid",
+		"undo": "Undo",
+		"redo": "Redo",
+		"hoverHint": "Hover to inspect a region",
+		"faceLabel": "{{part}} · {{face}} · {{layer}}",
+		"shortcuts": "Shortcuts: B brush · E eraser · I picker · G fill",
+		"preview": "Live 3D preview",
+		"pauseAutoRotate": "Pause auto rotation",
+		"resumeAutoRotate": "Resume auto rotation",
+		"previewFailed": "Preview failed",
+		"previewFailedDescription": "The edited skin could not be loaded into the 3D preview.",
+		"importSuccess": "Skin imported and normalized to 64 × 64",
+		"replaceSuccess": "Original texture updated safely; profile bindings were preserved",
+		"copySuccess": "Saved as a new private skin texture",
+		"copyName": "{{name}} (copy)",
+		"copyTagsWarning": "The copy was saved, but its tags could not all be copied.",
+		"libraryResetNotice": "Replacing keeps the name, tags, visibility, and profile bindings. Public library review state will reset to private.",
+		"transparentBaseWarning": "The base layer contains {{count}} transparent pixels. Some Minecraft clients may render these areas as black.",
+		"tool": {
+			"brush": "Brush",
+			"eraser": "Eraser",
+			"picker": "Picker",
+			"bucket": "Fill"
+		},
+		"layer": {
+			"base": "Base",
+			"overlay": "Overlay",
+			"baseDescription": "Head, body, arms, and legs",
+			"overlayDescription": "Hat, jacket, sleeves, and trousers"
+		},
+		"part": {
+			"head": "Head",
+			"body": "Body",
+			"rightArm": "Right arm",
+			"leftArm": "Left arm",
+			"rightLeg": "Right leg",
+			"leftLeg": "Left leg"
+		},
+		"face": {
+			"top": "Top",
+			"bottom": "Bottom",
+			"right": "Right",
+			"front": "Front",
+			"left": "Left",
+			"back": "Back"
+		},
+		"model": {
+			"title": "Arm model",
+			"default": "Steve (4 px)",
+			"slim": "Alex (3 px)"
+		},
+		"pose": {
+			"title": "Preview pose",
+			"reset": "Reset",
+			"headPitch": "Head pitch",
+			"headYaw": "Head yaw",
+			"rightArmPitch": "Right arm",
+			"leftArmPitch": "Left arm",
+			"rightLegPitch": "Right leg",
+			"leftLegPitch": "Left leg"
+		},
+		"replaceConfirm": {
+			"title": "Replace the original texture?",
+			"description": "The current pixels will replace {{name}}. Its texture ID, name, tags, visibility, and profile bindings remain intact. Public library review state will reset."
+		},
+		"leaveConfirm": {
+			"title": "Discard unsaved changes?",
+			"description": "Pixel changes that have not been saved to the wardrobe will be lost when you leave the editor.",
+			"stay": "Keep editing",
+			"leave": "Discard and leave"
+		},
+		"error": {
+			"title": "Could not open the skin editor",
+			"invalidTexture": "The texture ID is invalid.",
+			"skinOnly": "The pixel editor currently supports Minecraft skins, not capes.",
+			"load": "The skin could not be loaded: {{error}}. If it uses a separate CDN, make sure browser cross-origin reads are allowed.",
+			"pngOnly": "Choose a PNG skin file.",
+			"dimensions": "Skin dimensions must be 64 × 64, 64 × 32, or an integer multiple of either format.",
+			"import": "The skin could not be imported: {{error}}"
+		}
 	},
 	"sessions": {
 		"title": "Account Sessions",

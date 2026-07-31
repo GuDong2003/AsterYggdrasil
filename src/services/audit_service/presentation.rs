@@ -82,6 +82,7 @@ fn summary_message(
         | AuditAction::MinecraftProfileRename
         | AuditAction::MinecraftProfileDelete
         | AuditAction::MinecraftTextureUpload
+        | AuditAction::MinecraftTextureEdit
         | AuditAction::MinecraftTextureBind
         | AuditAction::MinecraftTextureDelete
         | AuditAction::MinecraftTextureLibrarySubmit
@@ -284,6 +285,15 @@ fn detail_message(
             copy_param(details, &mut params, "height");
             copy_param(details, &mut params, "file_size");
             Some(message("minecraft_texture_uploaded", params))
+        }
+        AuditAction::MinecraftTextureEdit => {
+            copy_param(details, &mut params, "texture_type");
+            copy_param(details, &mut params, "texture_hash");
+            copy_param(details, &mut params, "texture_model");
+            copy_param(details, &mut params, "width");
+            copy_param(details, &mut params, "height");
+            copy_param(details, &mut params, "file_size");
+            Some(message("minecraft_texture_edited", params))
         }
         AuditAction::MinecraftTextureBind => {
             copy_param(details, &mut params, "profile_uuid");

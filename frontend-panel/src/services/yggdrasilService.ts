@@ -293,6 +293,10 @@ export const yggdrasilService = {
 				tag_search_method: params.tag_search_method,
 			}),
 		),
+	getWardrobeTexture: (textureId: number) =>
+		api.get<MinecraftWardrobeTextureMetadata>(
+			`/wardrobe/textures/${textureId}`,
+		),
 	listTextureLibraryTags: (options: { force?: boolean } = {}) =>
 		cachedTextureLibraryTags(Boolean(options.force)),
 	listTextureLibraryTagsPage: (
@@ -413,6 +417,19 @@ export const yggdrasilService = {
 			`/wardrobe/textures/${textureId}`,
 			data,
 		),
+	async replaceWardrobeTextureContent(params: {
+		textureId: number;
+		file: File;
+		model: MinecraftTextureModel;
+	}) {
+		const form = new FormData();
+		form.append("model", params.model === "slim" ? "slim" : "");
+		form.append("file", params.file);
+		return api.put<MinecraftWardrobeTextureMetadata, FormData>(
+			`/wardrobe/textures/${params.textureId}/content`,
+			form,
+		);
+	},
 	replaceWardrobeTextureTags: (
 		textureId: number,
 		data: ReplaceWardrobeTextureTagsRequest,

@@ -18,6 +18,9 @@ const AccountAuditPage = lazyWithPreload(
 const TextureWardrobePage = lazyWithPreload(
 	() => import("@/pages/account/TextureWardrobePage"),
 );
+const SkinEditorPage = lazyWithPreload(
+	() => import("@/pages/account/SkinEditorPage"),
+);
 
 export function Pcl2ClosetRedirect() {
 	const location = useLocation();
@@ -36,6 +39,7 @@ export const accountRoutes = [
 			{ path: accountPaths.home, element: <AccountOverviewPage /> },
 			{ path: accountPaths.profiles, element: <MinecraftProfilesPage /> },
 			{ path: accountPaths.wardrobe, element: <TextureWardrobePage /> },
+			{ path: accountPaths.wardrobeEditor, element: <SkinEditorPage /> },
 			{
 				path: accountPaths.wardrobePcl2Compat,
 				element: <Pcl2ClosetRedirect />,

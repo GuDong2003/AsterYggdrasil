@@ -73,6 +73,7 @@ const AUDIT_ACTION_LABELS = {
 	minecraft_profile_rename: "Minecraft profile renamed",
 	minecraft_texture_bind: "Minecraft texture bound",
 	minecraft_texture_delete: "Minecraft texture deleted",
+	minecraft_texture_edit: "Minecraft texture edited",
 	minecraft_texture_library_approve: "Texture library submission approved",
 	minecraft_texture_library_reject: "Texture library submission rejected",
 	minecraft_texture_library_submit: "Texture library submission created",

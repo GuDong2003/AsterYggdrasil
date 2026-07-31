@@ -133,7 +133,9 @@ profile name 支持通过用户或管理员 API 受控改名。改名会保留 U
 
 ```text
 GET    /api/v1/wardrobe/textures
+GET    /api/v1/wardrobe/textures/{texture_id}
 POST   /api/v1/wardrobe/textures/{skin|cape}
+PUT    /api/v1/wardrobe/textures/{texture_id}/content
 DELETE /api/v1/wardrobe/textures/{texture_id}
 PUT    /api/v1/profiles/minecraft/{uuid}/textures/{skin|cape}
 DELETE /api/v1/profiles/minecraft/{uuid}/textures/{skin|cape}
@@ -148,6 +150,8 @@ GET    /api/yggdrasil/textures/{hash}
 ```
 
 上传文件必须是 PNG。服务端会校验 MIME、尺寸、上传开关和 profile 所属关系，把图片重编码为安全 PNG，再按处理后的内容计算 hash。
+
+账号衣柜内置浏览器皮肤编辑器，支持现代 `64×64` 皮肤和旧版 `64×32` 导入，提供内外层编辑、撤销/重做、3D 姿态预览，以及真正重排 UV 像素的 Steve/Alex 模型转换。编辑结果可以另存为私有副本，也可以原位覆盖衣柜材质；原位覆盖会保留材质 ID、名称、标签、可见性和 profile 绑定，同时重置公共材质库审核状态，避免修改后的内容绕过审核。
 
 公共材质库 API 支持用户发布和复用 wardrobe 材质：
 
@@ -247,6 +251,7 @@ docker run -d \
 - 当前部署文档只覆盖单个任务 owner。多实例部署时，请先在外层保证只有一个实例启动完整后台任务。
 - 当前生产可用的 object storage backend 是 local、S3 或 MinIO。材质和上传头像都会走同一个 backend。
 - 对公开读的 S3/MinIO bucket 或 CDN，可以配置 `yggdrasil_texture_public_base_url` 让已上传材质 URL 直接指向对象存储；默认皮肤仍走 Yggdrasil API。
+- 如果上传材质 URL 与面板不在同一源，请在 CDN 或 bucket 上通过 CORS 放行面板源；浏览器皮肤编辑器必须先读取源 PNG 才能进行编辑。
 
 ## 常用开发命令
 

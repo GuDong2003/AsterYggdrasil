@@ -236,6 +236,8 @@
 		"bindToProfile": "绑定到角色",
 		"bindAction": "绑定",
 		"editAction": "编辑",
+		"editSkinAction": "编辑皮肤",
+		"propertiesAction": "属性",
 		"saving": "处理中",
 		"deleteAction": "删除",
 		"resetSelection": "重置已选材质",
@@ -416,6 +418,109 @@
 		"passkeysDelete": "删除",
 		"passkeysCreatedAt": "创建",
 		"passkeysUpdated": "更新"
+	},
+	"skinEditor": {
+		"pageTitle": "皮肤像素编辑器",
+		"pageTitleWithName": "编辑 {{name}}",
+		"title": "皮肤像素编辑器",
+		"backToWardrobe": "返回材质衣柜",
+		"unsaved": "有未保存修改",
+		"saved": "已保存",
+		"import": "导入 PNG",
+		"download": "下载 PNG",
+		"saveCopy": "另存为副本",
+		"replaceOriginal": "覆盖原材质",
+		"navigator": "导航",
+		"coordinates": "当前坐标",
+		"zoomOut": "缩小",
+		"zoomIn": "放大",
+		"layers": "图层",
+		"hideOverlay": "隐藏外层",
+		"showOverlay": "显示外层",
+		"file": "画布",
+		"newBlank": "清空画布",
+		"color": "画笔颜色",
+		"brushSize": "大小",
+		"grid": "网格",
+		"undo": "撤销",
+		"redo": "重做",
+		"hoverHint": "悬停查看区域",
+		"faceLabel": "{{part}} · {{face}} · {{layer}}",
+		"shortcuts": "快捷键：B 画笔 · E 橡皮 · I 吸管 · G 填充",
+		"preview": "实时 3D 预览",
+		"pauseAutoRotate": "暂停自动旋转",
+		"resumeAutoRotate": "继续自动旋转",
+		"previewFailed": "预览加载失败",
+		"previewFailedDescription": "编辑中的皮肤暂时无法加载到 3D 预览。",
+		"importSuccess": "皮肤已导入并规范化为 64 × 64",
+		"replaceSuccess": "原材质内容已安全更新，角色绑定保持不变",
+		"copySuccess": "已另存为新的私有皮肤材质",
+		"copyName": "{{name}}（副本）",
+		"copyTagsWarning": "副本已保存，但标签未能完整复制。",
+		"libraryResetNotice": "覆盖后会保留名称、标签、可见性和角色绑定；公开材质库的审核状态会重置为私有。",
+		"transparentBaseWarning": "内层有 {{count}} 个透明像素。部分 Minecraft 客户端可能把这些区域显示为黑色。",
+		"tool": {
+			"brush": "画笔",
+			"eraser": "橡皮",
+			"picker": "吸管",
+			"bucket": "填充"
+		},
+		"layer": {
+			"base": "内层",
+			"overlay": "外层",
+			"baseDescription": "头、身体、手臂与腿部",
+			"overlayDescription": "帽子、外套、袖子与裤腿"
+		},
+		"part": {
+			"head": "头部",
+			"body": "身体",
+			"rightArm": "右臂",
+			"leftArm": "左臂",
+			"rightLeg": "右腿",
+			"leftLeg": "左腿"
+		},
+		"face": {
+			"top": "顶部",
+			"bottom": "底部",
+			"right": "右侧",
+			"front": "正面",
+			"left": "左侧",
+			"back": "背面"
+		},
+		"model": {
+			"title": "手臂模型",
+			"default": "Steve 粗手",
+			"slim": "Alex 细手"
+		},
+		"pose": {
+			"title": "预览姿态",
+			"reset": "重置",
+			"headPitch": "头部俯仰",
+			"headYaw": "头部左右",
+			"rightArmPitch": "右臂",
+			"leftArmPitch": "左臂",
+			"rightLegPitch": "右腿",
+			"leftLegPitch": "左腿"
+		},
+		"replaceConfirm": {
+			"title": "覆盖原材质内容？",
+			"description": "将用当前像素覆盖 {{name}}。材质 ID、名称、标签、可见性和角色绑定都会保留；若已进入公开材质库流程，审核状态会重置。"
+		},
+		"leaveConfirm": {
+			"title": "放弃未保存修改？",
+			"description": "离开编辑器后，尚未保存到衣柜的像素修改将丢失。",
+			"stay": "继续编辑",
+			"leave": "放弃并离开"
+		},
+		"error": {
+			"title": "无法打开皮肤编辑器",
+			"invalidTexture": "材质 ID 无效。",
+			"skinOnly": "像素编辑器目前只支持 Minecraft 皮肤，不支持披风。",
+			"load": "皮肤加载失败：{{error}}。如果材质使用独立 CDN，请确认它允许浏览器跨域读取。",
+			"pngOnly": "请选择 PNG 皮肤文件。",
+			"dimensions": "皮肤尺寸必须是 64 × 64、64 × 32，或它们的整数倍。",
+			"import": "皮肤导入失败：{{error}}"
+		}
 	},
 	"sessions": {
 		"title": "账号会话",

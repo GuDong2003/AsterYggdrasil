@@ -1859,6 +1859,187 @@ where
     Ok(StoredWardrobeTexture { texture })
 }
 
+pub async fn replace_wardrobe_texture_content<S>(
+    state: &S,
+    user_id: i64,
+    wardrobe_texture_id: i64,
+    texture_model: MinecraftTextureModel,
+    source_path: PathBuf,
+) -> std::result::Result<MinecraftWardrobeTextureMetadata, TextureError>
+where
+    S: CacheRuntimeState
+        + DatabaseRuntimeState
+        + ObjectStorageRuntimeState
+        + RuntimeConfigRuntimeState,
+{
+    ban_service::ensure_user_not_banned(state, user_id, UserBanScope::TextureUpload)
+        .await
+        .map_err(TextureError::from)?;
+    if wardrobe_texture_id <= 0 {
+        return Err(TextureError::with_detail(
+            TextureErrorKind::NotFound,
+            format!("wardrobe texture #{wardrobe_texture_id}"),
+        ));
+    }
+    let Some(existing) = minecraft_texture_repo::find_by_id_for_user(
+        state.reader_db(),
+        wardrobe_texture_id,
+        user_id,
+    )
+    .await
+    .map_err(TextureError::from)?
+    .filter(|texture| texture.is_wardrobe_item) else {
+        return Err(TextureError::with_detail(
+            TextureErrorKind::NotFound,
+            format!("wardrobe texture #{wardrobe_texture_id}"),
+        ));
+    };
+    let texture_model = if existing.texture_type == MinecraftTextureType::Skin {
+        texture_model
+    } else {
+        MinecraftTextureModel::Default
+    };
+    let policy = crate::config::yggdrasil::RuntimeYggdrasilPolicy::from_runtime_config(
+        state.runtime_config(),
+    );
+    let processed_path = temporary_processed_path(&source_path);
+    let processing = process_texture_file(
+        &source_path,
+        &processed_path,
+        existing.texture_type,
+        policy.max_texture_pixels,
+    )
+    .await;
+    let processing = match processing {
+        Ok(processing) => processing,
+        Err(error) => {
+            aster_forge_utils::fs::cleanup_temp_file(&processed_path).await;
+            return Err(TextureError::with_detail(
+                TextureErrorKind::InvalidPng,
+                error.message(),
+            ));
+        }
+    };
+
+    if processing.hash == existing.hash && texture_model == existing.texture_model {
+        aster_forge_utils::fs::cleanup_temp_file(&processed_path).await;
+        return wardrobe_texture_with_current_tags(state, &existing)
+            .await
+            .map_err(TextureError::from);
+    }
+
+    let normalized_metadata = (|| {
+        let file_size =
+            aster_forge_utils::numbers::u64_to_i64(processing.file_size, "texture file size")
+                .map_err(AsterError::from)
+                .map_err(TextureError::from)?;
+        let width = aster_forge_utils::numbers::u32_to_i32(processing.width, "texture width")
+            .map_err(AsterError::from)
+            .map_err(TextureError::from)?;
+        let height = aster_forge_utils::numbers::u32_to_i32(processing.height, "texture height")
+            .map_err(AsterError::from)
+            .map_err(TextureError::from)?;
+        Ok::<_, TextureError>((file_size, width, height))
+    })();
+    let (file_size, width, height) = match normalized_metadata {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            aster_forge_utils::fs::cleanup_temp_file(&processed_path).await;
+            return Err(error);
+        }
+    };
+    let storage_key = object_storage_key(&processing.hash);
+    if processing.hash != existing.hash {
+        let put_result = state
+            .object_storage()
+            .put_file(&storage_key, &processed_path)
+            .await;
+        aster_forge_utils::fs::cleanup_temp_file(&processed_path).await;
+        put_result.map_err(TextureError::from)?;
+    } else {
+        aster_forge_utils::fs::cleanup_temp_file(&processed_path).await;
+    }
+
+    let bindings =
+        match minecraft_profile_texture_repo::list_by_texture_id(state.writer_db(), existing.id)
+            .await
+        {
+            Ok(bindings) => bindings,
+            Err(error) => {
+                cleanup_texture_blob_if_unreferenced(
+                    state,
+                    &storage_key,
+                    "wardrobe texture replacement binding lookup failure",
+                )
+                .await;
+                return Err(TextureError::from(error));
+            }
+        };
+    let updated = minecraft_texture_repo::replace_wardrobe_content_for_user(
+        state.writer_db(),
+        existing.clone(),
+        user_id,
+        minecraft_texture_repo::ReplaceWardrobeTextureContent {
+            hash: &processing.hash,
+            storage_key: &storage_key,
+            mime_type: PNG_CONTENT_TYPE,
+            file_size,
+            width,
+            height,
+            texture_model,
+        },
+    )
+    .await
+    .map_err(TextureError::from);
+    let updated = match updated {
+        Ok(Some(texture)) => texture,
+        Ok(None) => {
+            cleanup_texture_blob_if_unreferenced(
+                state,
+                &storage_key,
+                "wardrobe texture replacement ownership changed",
+            )
+            .await;
+            return Err(TextureError::with_detail(
+                TextureErrorKind::NotFound,
+                format!("wardrobe texture #{wardrobe_texture_id}"),
+            ));
+        }
+        Err(error) => {
+            cleanup_texture_blob_if_unreferenced(
+                state,
+                &storage_key,
+                "wardrobe texture replacement failure",
+            )
+            .await;
+            return Err(error);
+        }
+    };
+
+    invalidate_profile_texture_caches_for_bindings(state, &bindings).await;
+    invalidate_texture_asset_caches(state, &existing).await;
+    invalidate_texture_asset_caches(state, &updated).await;
+    if existing.storage_key != updated.storage_key {
+        cleanup_texture_blob_if_unreferenced(
+            state,
+            &existing.storage_key,
+            "wardrobe texture replacement",
+        )
+        .await;
+    }
+    tracing::debug!(
+        user_id,
+        texture_id = updated.id,
+        old_hash = %existing.hash,
+        new_hash = %updated.hash,
+        texture_model = ?updated.texture_model,
+        "replaced wardrobe texture content"
+    );
+    wardrobe_texture_with_current_tags(state, &updated)
+        .await
+        .map_err(TextureError::from)
+}
+
 pub async fn register_bound_textures_in_wardrobe<S>(
     state: &S,
 ) -> std::result::Result<WardrobeRegistrationResult, TextureError>
@@ -2148,6 +2329,18 @@ where
     let textures = minecraft_texture_repo::list_by_user(state.reader_db(), user_id).await?;
     tracing::debug!(user_id, count = textures.len(), "listed wardrobe textures");
     Ok(textures)
+}
+
+pub async fn get_wardrobe_texture<S>(
+    state: &S,
+    user_id: i64,
+    texture_id: i64,
+) -> Result<MinecraftWardrobeTextureMetadata>
+where
+    S: DatabaseRuntimeState + RuntimeConfigRuntimeState,
+{
+    let texture = user_wardrobe_texture(state, user_id, texture_id).await?;
+    wardrobe_texture_with_current_tags(state, &texture).await
 }
 
 pub async fn list_wardrobe_textures_cursor<S>(

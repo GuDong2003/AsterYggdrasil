@@ -83,6 +83,7 @@ const STARTUP_FORBIDDEN_PRECACHE_GLOBS = [
 	"assets/**/*Admin*",
 	"assets/**/*admin*",
 	"assets/**/*MinecraftPreview*",
+	"assets/**/*SkinEditor*",
 	"assets/**/*StaticSkinPreview*",
 	"assets/**/*TextureWardrobe*",
 	"assets/**/*vendor-3d*",

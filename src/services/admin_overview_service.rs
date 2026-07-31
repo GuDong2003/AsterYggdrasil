@@ -45,6 +45,7 @@ const USER_ACTIVITY_ACTIONS: &[AuditAction] = &[
     AuditAction::MinecraftProfileRename,
     AuditAction::MinecraftProfileDelete,
     AuditAction::MinecraftTextureUpload,
+    AuditAction::MinecraftTextureEdit,
     AuditAction::MinecraftTextureBind,
     AuditAction::MinecraftTextureDelete,
     AuditAction::YggdrasilAuthenticate,

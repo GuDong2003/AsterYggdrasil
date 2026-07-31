@@ -31,7 +31,9 @@ import {
 	PiDotsThree,
 	PiDownloadSimple,
 	PiEnvelopeSimple,
+	PiEraser,
 	PiEye,
+	PiEyedropper,
 	PiEyeSlash,
 	PiFile,
 	PiFileAudio,
@@ -70,6 +72,8 @@ import {
 	PiMonitor,
 	PiMoon,
 	PiMusicNotes,
+	PiPaintBrush,
+	PiPaintBucket,
 	PiPause,
 	PiPencilSimple,
 	PiPlay,
@@ -137,6 +141,8 @@ export type IconName =
 	| "DotsThree"
 	| "Download"
 	| "EnvelopeSimple"
+	| "Eraser"
+	| "Eyedropper"
 	| "Eye"
 	| "EyeSlash"
 	| "File"
@@ -177,6 +183,8 @@ export type IconName =
 	| "Moon"
 	| "Minus"
 	| "Pause"
+	| "PaintBrush"
+	| "PaintBucket"
 	| "MusicNotes"
 	| "PencilSimple"
 	| "Play"
@@ -245,6 +253,8 @@ const iconMap: Record<IconName, ComponentType<{ className?: string }>> = {
 	DotsThree: PiDotsThree,
 	Download: PiDownloadSimple,
 	EnvelopeSimple: PiEnvelopeSimple,
+	Eraser: PiEraser,
+	Eyedropper: PiEyedropper,
 	Eye: PiEye,
 	EyeSlash: PiEyeSlash,
 	File: PiFile,
@@ -286,6 +296,8 @@ const iconMap: Record<IconName, ComponentType<{ className?: string }>> = {
 	Minus: PiMinus,
 	MusicNotes: PiMusicNotes,
 	Pause: PiPause,
+	PaintBrush: PiPaintBrush,
+	PaintBucket: PiPaintBucket,
 	PencilSimple: PiPencilSimple,
 	Play: PiPlay,
 	Plus: PiPlus,

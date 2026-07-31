@@ -58,6 +58,17 @@ pub struct UpdateWardrobeTextureMetadata {
 }
 
 #[derive(Debug, Clone)]
+pub struct ReplaceWardrobeTextureContent<'a> {
+    pub hash: &'a str,
+    pub storage_key: &'a str,
+    pub mime_type: &'a str,
+    pub file_size: i64,
+    pub width: i32,
+    pub height: i32,
+    pub texture_model: MinecraftTextureModel,
+}
+
+#[derive(Debug, Clone)]
 pub struct UpdateTextureLibraryReview {
     pub library_status: MinecraftTextureLibraryStatus,
     pub library_submitted_at: Option<Option<DateTime<Utc>>>,
@@ -537,6 +548,38 @@ pub async fn update_wardrobe_metadata_for_user<C: ConnectionTrait>(
             active.library_review_note = Set(None);
         }
     }
+    active.updated_at = Set(now);
+    active
+        .update(db)
+        .await
+        .map(Some)
+        .map_aster_err(AsterError::database_operation)
+}
+
+pub async fn replace_wardrobe_content_for_user<C: ConnectionTrait>(
+    db: &C,
+    texture: minecraft_texture::Model,
+    user_id: i64,
+    input: ReplaceWardrobeTextureContent<'_>,
+) -> Result<Option<minecraft_texture::Model>> {
+    if texture.user_id != user_id || !texture.is_wardrobe_item {
+        return Ok(None);
+    }
+    let now = chrono::Utc::now();
+    let mut active: minecraft_texture::ActiveModel = texture.into();
+    active.source = Set(MinecraftTextureSource::Local);
+    active.hash = Set(input.hash.to_string());
+    active.storage_key = Set(input.storage_key.to_string());
+    active.mime_type = Set(input.mime_type.to_string());
+    active.file_size = Set(input.file_size);
+    active.width = Set(input.width);
+    active.height = Set(input.height);
+    active.texture_model = Set(input.texture_model);
+    active.library_status = Set(MinecraftTextureLibraryStatus::Private);
+    active.library_submitted_at = Set(None);
+    active.library_reviewed_at = Set(None);
+    active.library_reviewer_user_id = Set(None);
+    active.library_review_note = Set(None);
     active.updated_at = Set(now);
     active
         .update(db)

@@ -20,11 +20,16 @@ export const accountPaths = {
 	forcePasswordChange: "/force-password-change",
 	profiles: "/account/profiles",
 	wardrobe: "/account/wardrobe",
+	wardrobeEditor: "/account/wardrobe/editor/:textureId",
 	wardrobePcl2Compat: "/user/closet",
 	audit: "/account/audit",
 	settings: "/account/settings",
 	settingsSecurityCompat: "/settings/security",
 } as const;
+
+export function accountWardrobeEditorPath(textureId: number | string) {
+	return `/account/wardrobe/editor/${encodeURIComponent(String(textureId))}`;
+}
 
 export const adminPaths = {
 	home: "/admin",

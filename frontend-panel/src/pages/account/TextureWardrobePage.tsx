@@ -9,6 +9,7 @@ import {
 	useState,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useTextureWardrobePageState } from "@/components/account/wardrobe-page/useTextureWardrobePageState";
 import { DateTimeText } from "@/components/common/DateTimeText";
@@ -39,6 +40,7 @@ import { useTextureTagPager } from "@/hooks/useTextureTagPager";
 import { validateMinecraftTextureFile } from "@/lib/minecraftTextureValidation";
 import { formatBytes } from "@/lib/numberUnit";
 import { cn } from "@/lib/utils";
+import { accountWardrobeEditorPath } from "@/routes/routePaths";
 import { formatUnknownError } from "@/services/http";
 import { yggdrasilService } from "@/services/yggdrasilService";
 import { useFrontendConfigStore } from "@/stores/frontendConfigStore";
@@ -58,6 +60,7 @@ const TAG_FILTER_APPLY_DEBOUNCE_MS = 240;
 
 export default function TextureWardrobePage() {
 	const { t } = useTranslation();
+	const navigate = useNavigate();
 	const [state, dispatch] = useTextureWardrobePageState();
 	const [textureCursorStack, setTextureCursorStack] = useState<
 		DateTimeIdCursor[]
@@ -706,6 +709,11 @@ export default function TextureWardrobePage() {
 					onEdit={() => {
 						if (previewTexture) openEditDialog(previewTexture);
 					}}
+					onEditSkin={() => {
+						if (previewTexture?.texture_type === "skin") {
+							navigate(accountWardrobeEditorPath(previewTexture.id));
+						}
+					}}
 					onSubmitLibrary={() => {
 						if (previewTexture) void submitTextureLibrary(previewTexture);
 					}}
@@ -1121,6 +1129,7 @@ function PreviewPanel({
 	onBind,
 	onDelete,
 	onEdit,
+	onEditSkin,
 	onSubmitLibrary,
 	onWithdrawLibrary,
 	submitting,
@@ -1131,6 +1140,7 @@ function PreviewPanel({
 	onBind: () => void;
 	onDelete: () => void;
 	onEdit: () => void;
+	onEditSkin: () => void;
 	onSubmitLibrary: () => void;
 	onWithdrawLibrary: () => void;
 	submitting: boolean;
@@ -1214,12 +1224,20 @@ function PreviewPanel({
 						</Button>
 						<Button
 							type="button"
+							disabled={texture?.texture_type !== "skin"}
+							onClick={onEditSkin}
+						>
+							<Icon name="PaintBrush" className="mr-2 size-4" />
+							{t("wardrobe.editSkinAction")}
+						</Button>
+						<Button
+							type="button"
 							variant="outline"
 							disabled={!texture}
 							onClick={onEdit}
 						>
-							<Icon name="PencilSimple" className="mr-2 size-4" />
-							{t("wardrobe.editAction")}
+							<Icon name="Gear" className="mr-2 size-4" />
+							{t("wardrobe.propertiesAction")}
 						</Button>
 					</div>
 					<Button

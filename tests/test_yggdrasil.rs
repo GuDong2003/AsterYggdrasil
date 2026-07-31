@@ -3859,6 +3859,115 @@ async fn yggdrasil_profile_property_cache_refreshes_after_bound_wardrobe_model_u
 }
 
 #[actix_web::test]
+async fn wardrobe_texture_content_replace_preserves_identity_metadata_and_bindings() {
+    let state = setup_yggdrasil_with_memory_cache().await;
+    let app = create_test_app!(state.clone());
+    let access = setup_admin!(app);
+    let profile_id = create_profile!(&app, &access, "EditedSkin");
+    let texture_id = publish_test_library_texture(
+        &app,
+        &access,
+        &access,
+        "Editor Original",
+        image::Rgba([31, 41, 59, 255]),
+    )
+    .await;
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/admin/texture-library/tags")
+        .insert_header(common::bearer_header(&access))
+        .set_json(serde_json::json!({
+            "name": "Editor Tag",
+            "color": "#10b981",
+            "sort_order": 1
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let tag_body: Value = test::read_body_json(resp).await;
+    let tag_id = tag_body["data"]["id"].as_i64().unwrap();
+
+    let req = test::TestRequest::put()
+        .uri(&format!("/api/v1/wardrobe/textures/{texture_id}/tags"))
+        .insert_header(common::bearer_header(&access))
+        .set_json(serde_json::json!({ "tag_ids": [tag_id] }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let req = test::TestRequest::get()
+        .uri(&format!("/api/v1/wardrobe/textures/{texture_id}"))
+        .insert_header(common::bearer_header(&access))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let original_body: Value = test::read_body_json(resp).await;
+    let original_hash = original_body["data"]["hash"].as_str().unwrap().to_string();
+    assert_eq!(original_body["data"]["name"], "Editor Original");
+    assert_eq!(original_body["data"]["visibility"], "public");
+    assert_eq!(original_body["data"]["library_status"], "published");
+
+    let req = test::TestRequest::put()
+        .uri(&format!(
+            "/api/v1/profiles/minecraft/{profile_id}/textures/skin"
+        ))
+        .insert_header(common::bearer_header(&access))
+        .set_json(serde_json::json!({ "texture_id": texture_id }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let replacement = png_texture_with_color(64, 64, image::Rgba([16, 185, 129, 255]));
+    let (content_type, body) = texture_multipart_body(Some("slim"), &replacement);
+    let req = test::TestRequest::put()
+        .uri(&format!("/api/v1/wardrobe/textures/{texture_id}/content"))
+        .insert_header(common::bearer_header(&access))
+        .insert_header(("Content-Type", content_type))
+        .set_payload(body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let replaced_body: Value = test::read_body_json(resp).await;
+    let replaced = &replaced_body["data"];
+    let replacement_hash = replaced["hash"].as_str().unwrap();
+    assert_eq!(replaced["id"], texture_id);
+    assert_ne!(replacement_hash, original_hash);
+    assert_eq!(replaced["name"], "Editor Original");
+    assert_eq!(replaced["visibility"], "public");
+    assert_eq!(replaced["texture_model"], "slim");
+    assert_eq!(replaced["library_status"], "private");
+    assert_eq!(replaced["tags"][0]["id"], tag_id);
+    assert_eq!(replaced["tags"][0]["name"], "Editor Tag");
+    assert!(replaced["library_submitted_at"].is_null());
+    assert!(replaced["library_reviewed_at"].is_null());
+
+    let req = test::TestRequest::get()
+        .uri(&format!("/api/v1/wardrobe/textures/{texture_id}"))
+        .insert_header(common::bearer_header(&access))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let fetched_body: Value = test::read_body_json(resp).await;
+    assert_eq!(fetched_body["data"]["hash"], replacement_hash);
+    assert_eq!(fetched_body["data"]["id"], texture_id);
+
+    let refreshed_textures = profile_textures!(app, &profile_id);
+    assert_eq!(
+        texture_hash_from_property(&refreshed_textures, "SKIN"),
+        replacement_hash
+    );
+    assert_eq!(
+        refreshed_textures["textures"]["SKIN"]["metadata"]["model"],
+        "slim"
+    );
+
+    audit_service::flush_global_audit_log_manager().await;
+    let edit_entry = audit_entry(&state, audit_service::AuditAction::MinecraftTextureEdit).await;
+    assert_eq!(edit_entry.entity_type, "minecraft_texture");
+    assert_eq!(edit_entry.entity_id, Some(texture_id));
+}
+
+#[actix_web::test]
 async fn texture_preview_responses_support_etag_revalidation() {
     let state = setup_yggdrasil().await;
     let app = create_test_app!(state);

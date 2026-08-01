@@ -353,8 +353,7 @@ where
                 public_reason,
                 admin_note,
                 starts_at: input.starts_at,
-                expires_at: Some(next_expires_at)
-                    .filter(|_| next_expires_at != previous_expires_at),
+                expires_at: (next_expires_at != previous_expires_at).then_some(next_expires_at),
             },
         )
         .await?;

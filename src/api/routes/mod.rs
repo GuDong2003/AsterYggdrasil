@@ -21,7 +21,10 @@ pub fn configure_api(cfg: &mut web::ServiceConfig) {
         .configure(auth::configure)
         .configure(account::configure)
         .configure(profiles::configure)
-        .configure(wardrobe::configure)
+        .service(wardrobe::routes(
+            &crate::config::get_config().rate_limit,
+            &crate::config::get_config().network_trust,
+        ))
         .configure(texture_library::configure)
         .configure(texture_preview::configure)
         .configure(public::configure)

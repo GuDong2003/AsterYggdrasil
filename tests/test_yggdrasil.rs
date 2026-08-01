@@ -40,13 +40,14 @@ use sea_orm::{
 };
 use serde_json::Value;
 use std::{
+    collections::HashSet,
     fs,
     io::Cursor,
     num::{NonZeroU32, NonZeroU64},
     path::Path,
     sync::{Arc, Mutex},
 };
-use tokio::io::AsyncRead;
+use tokio::{io::AsyncRead, sync::Barrier};
 
 const DEFAULT_STEVE_SKIN_HASH: &str =
     "082fdbe1403d09fcf030464bf754439ee79e9287bb15efbe2f54d02f60108133";
@@ -54,6 +55,11 @@ const DEFAULT_ALEX_SKIN_HASH: &str =
     "394b483392052fb28d6271c736ba0df0394223c93b6348f1f1d135fdb7412daa";
 
 struct FailingObjectStorage;
+
+struct PutBarrierObjectStorage {
+    inner: Arc<dyn ObjectStorage>,
+    put_barrier: Arc<Barrier>,
+}
 
 #[derive(Clone)]
 struct MockSessionForwardServer {
@@ -110,6 +116,39 @@ impl ObjectStorage for FailingObjectStorage {
 
     async fn list_keys(&self, _prefix: &str) -> Result<Vec<String>> {
         Ok(Vec::new())
+    }
+}
+
+#[async_trait::async_trait]
+impl ObjectStorage for PutBarrierObjectStorage {
+    fn backend_name(&self) -> &'static str {
+        "put-barrier"
+    }
+
+    async fn put_file(&self, storage_key: &str, local_path: &Path) -> Result<String> {
+        let result = self.inner.put_file(storage_key, local_path).await?;
+        self.put_barrier.wait().await;
+        Ok(result)
+    }
+
+    async fn get_stream(&self, storage_key: &str) -> Result<Box<dyn AsyncRead + Unpin + Send>> {
+        self.inner.get_stream(storage_key).await
+    }
+
+    async fn delete(&self, storage_key: &str) -> Result<()> {
+        self.inner.delete(storage_key).await
+    }
+
+    async fn exists(&self, storage_key: &str) -> Result<bool> {
+        self.inner.exists(storage_key).await
+    }
+
+    async fn metadata(&self, storage_key: &str) -> Result<ObjectBlobMetadata> {
+        self.inner.metadata(storage_key).await
+    }
+
+    async fn list_keys(&self, prefix: &str) -> Result<Vec<String>> {
+        self.inner.list_keys(prefix).await
     }
 }
 
@@ -3917,6 +3956,12 @@ async fn wardrobe_texture_content_replace_preserves_identity_metadata_and_bindin
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), 200);
 
+    let cached_textures = profile_textures!(app, &profile_id);
+    assert_eq!(
+        texture_hash_from_property(&cached_textures, "SKIN"),
+        original_hash
+    );
+
     let replacement = png_texture_with_color(64, 64, image::Rgba([16, 185, 129, 255]));
     let (content_type, body) = texture_multipart_body(Some("slim"), &replacement);
     let req = test::TestRequest::put()
@@ -3961,10 +4006,143 @@ async fn wardrobe_texture_content_replace_preserves_identity_metadata_and_bindin
         "slim"
     );
 
+    let (content_type, body) = texture_multipart_body(Some("slim"), &replacement);
+    let req = test::TestRequest::put()
+        .uri(&format!("/api/v1/wardrobe/textures/{texture_id}/content"))
+        .insert_header(common::bearer_header(&access))
+        .insert_header(("Content-Type", content_type))
+        .set_payload(body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let no_op_body: Value = test::read_body_json(resp).await;
+    assert_eq!(no_op_body["data"]["hash"], replacement_hash);
+
     audit_service::flush_global_audit_log_manager().await;
     let edit_entry = audit_entry(&state, audit_service::AuditAction::MinecraftTextureEdit).await;
     assert_eq!(edit_entry.entity_type, "minecraft_texture");
     assert_eq!(edit_entry.entity_id, Some(texture_id));
+    let edit_count = audit_log::Entity::find()
+        .filter(audit_log::Column::Action.eq(audit_service::AuditAction::MinecraftTextureEdit))
+        .filter(audit_log::Column::EntityId.eq(texture_id))
+        .count(state.writer_db())
+        .await
+        .unwrap();
+    assert_eq!(edit_count, 1, "no-op replacements must not add audit noise");
+}
+
+#[actix_web::test]
+async fn concurrent_wardrobe_texture_replacements_leave_no_orphan_blobs() {
+    let state = setup_yggdrasil().await;
+    let setup_app = create_test_app!(state.clone());
+    let access = setup_admin!(setup_app);
+    let original = png_texture_with_color(64, 64, image::Rgba([10, 20, 30, 255]));
+    let resp = upload_wardrobe_texture_req!(setup_app, &access, "skin", Some("default"), &original);
+    assert_eq!(resp.status(), 200);
+    let uploaded: Value = test::read_body_json(resp).await;
+    let texture_id = uploaded["data"]["id"].as_i64().unwrap();
+
+    let mut concurrent_state = state.clone();
+    concurrent_state.object_storage = Arc::new(PutBarrierObjectStorage {
+        inner: state.object_storage.clone(),
+        put_barrier: Arc::new(Barrier::new(2)),
+    });
+    let app = create_test_app!(concurrent_state.clone());
+    let marker = *uuid::Uuid::new_v4().as_bytes();
+    let first = png_texture_with_marker(&marker, 1);
+    let second = png_texture_with_marker(&marker, 2);
+    let (first_content_type, first_body) = texture_multipart_body(Some("default"), &first);
+    let (second_content_type, second_body) = texture_multipart_body(Some("slim"), &second);
+    let first_request = test::TestRequest::put()
+        .uri(&format!("/api/v1/wardrobe/textures/{texture_id}/content"))
+        .insert_header(common::bearer_header(&access))
+        .insert_header(("Content-Type", first_content_type))
+        .set_payload(first_body)
+        .to_request();
+    let second_request = test::TestRequest::put()
+        .uri(&format!("/api/v1/wardrobe/textures/{texture_id}/content"))
+        .insert_header(common::bearer_header(&access))
+        .insert_header(("Content-Type", second_content_type))
+        .set_payload(second_body)
+        .to_request();
+
+    let (first_response, second_response) = futures::join!(
+        test::call_service(&app, first_request),
+        test::call_service(&app, second_request),
+    );
+    assert_eq!(first_response.status(), 200);
+    assert_eq!(second_response.status(), 200);
+    let first_body: Value = test::read_body_json(first_response).await;
+    let second_body: Value = test::read_body_json(second_response).await;
+    let first_hash = first_body["data"]["hash"].as_str().unwrap().to_string();
+    let second_hash = second_body["data"]["hash"].as_str().unwrap().to_string();
+    assert_ne!(first_hash, second_hash);
+
+    let request = test::TestRequest::get()
+        .uri(&format!("/api/v1/wardrobe/textures/{texture_id}"))
+        .insert_header(common::bearer_header(&access))
+        .to_request();
+    let response = test::call_service(&app, request).await;
+    assert_eq!(response.status(), 200);
+    let current_body: Value = test::read_body_json(response).await;
+    let current_hash = current_body["data"]["hash"].as_str().unwrap().to_string();
+    assert!(current_hash == first_hash || current_hash == second_hash);
+
+    let storage_key = |hash: &str| format!("{}/{}.png", &hash[..2], hash);
+    let candidate_storage_keys =
+        HashSet::from([storage_key(&first_hash), storage_key(&second_hash)]);
+
+    let remaining_candidate_storage_keys = concurrent_state
+        .object_storage
+        .list_keys("")
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|key| candidate_storage_keys.contains(key))
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        remaining_candidate_storage_keys,
+        HashSet::from([storage_key(&current_hash)]),
+        "only the final replacement blob should remain after the concurrent requests"
+    );
+}
+
+#[actix_web::test]
+async fn wardrobe_texture_content_replacement_uses_write_rate_limit() {
+    let state = setup_yggdrasil().await;
+    let limits = RateLimitConfig {
+        enabled: true,
+        write: RateLimitTier {
+            seconds_per_request: NonZeroU64::new(60).unwrap(),
+            burst_size: NonZeroU32::new(1).unwrap(),
+        },
+        ..Default::default()
+    };
+    let network_trust = aster_yggdrasil::config::NetworkTrustConfig::default();
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).service(
+        web::scope("/api/v1").service(aster_yggdrasil::api::routes::wardrobe::routes(
+            &limits,
+            &network_trust,
+        )),
+    ))
+    .await;
+    let peer = "198.51.100.42:12345".parse().unwrap();
+    let first = test::TestRequest::put()
+        .uri("/api/v1/wardrobe/textures/1/content")
+        .peer_addr(peer)
+        .to_request();
+    let first_response = test::call_service(&app, first).await;
+    assert_ne!(first_response.status(), 429);
+
+    let second = test::TestRequest::put()
+        .uri("/api/v1/wardrobe/textures/1/content")
+        .peer_addr(peer)
+        .to_request();
+    let second_response = test::call_service(&app, second).await;
+    assert_eq!(second_response.status(), 429);
+    assert!(second_response.headers().contains_key("Retry-After"));
+    let body: Value = test::read_body_json(second_response).await;
+    assert_eq!(body["code"], "rate_limited");
 }
 
 #[actix_web::test]
@@ -7669,6 +7847,27 @@ fn png_texture(width: u32, height: u32) -> Vec<u8> {
 fn png_texture_with_color(width: u32, height: u32, color: image::Rgba<u8>) -> Vec<u8> {
     let mut bytes = Vec::new();
     let image = image::RgbaImage::from_pixel(width, height, color);
+    image
+        .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .expect("test png should encode");
+    bytes
+}
+
+fn png_texture_with_marker(marker: &[u8; 16], variant: u8) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut image = image::RgbaImage::from_pixel(64, 64, image::Rgba([10, 20, 30, 255]));
+    image.put_pixel(
+        0,
+        0,
+        image::Rgba([variant, marker[0], marker[1], marker[2]]),
+    );
+    for (index, chunk) in marker[3..15].chunks_exact(4).enumerate() {
+        image.put_pixel(
+            index as u32 + 1,
+            0,
+            image::Rgba([chunk[0], chunk[1], chunk[2], chunk[3]]),
+        );
+    }
     image
         .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
         .expect("test png should encode");

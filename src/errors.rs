@@ -74,6 +74,10 @@ impl AsterError {
         Self::public_error(StatusCode::NOT_FOUND, code, message)
     }
 
+    pub fn conflict_code(code: AsterErrorCode, message: impl Into<String>) -> Self {
+        Self::public_error(StatusCode::CONFLICT, code, message)
+    }
+
     pub fn auth_forbidden_code(code: AsterErrorCode, message: impl Into<String>) -> Self {
         Self::public_error(StatusCode::FORBIDDEN, code, message)
     }

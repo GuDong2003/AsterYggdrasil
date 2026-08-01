@@ -176,6 +176,7 @@ define_error_codes! {
     WardrobeTextureNotFound => "wardrobe.texture_not_found",
     WardrobeTextureTypeMismatch => "wardrobe.texture_type_mismatch",
     WardrobeTextureDeleteConflict => "wardrobe.texture_delete_conflict",
+    WardrobeTextureEditConflict => "wardrobe.texture_edit_conflict",
     WardrobeTextureNameInvalid => "wardrobe.texture_name_invalid",
     WardrobeTextureNameTaken => "wardrobe.texture_name_taken",
     TextureLibraryTagNotFound => "texture_library.tag_not_found",

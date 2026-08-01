@@ -1,6 +1,8 @@
 //! Current-user Minecraft wardrobe texture routes.
 
+use actix_governor::Governor;
 use actix_multipart::Multipart;
+use actix_web::middleware::Condition;
 use actix_web::{HttpRequest, HttpResponse, web};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
@@ -10,7 +12,9 @@ use validator::Validate;
 use crate::api::dto::textures::{ReplaceWardrobeTextureTagsReq, UpdateWardrobeTextureReq};
 use crate::api::dto::validate_request;
 use crate::api::error_code::AsterErrorCode;
+use crate::api::middleware::rate_limit;
 use crate::api::response::ApiResponse;
+use crate::config::{NetworkTrustConfig, RateLimitConfig};
 use crate::db::repository::minecraft_texture_repo::WardrobeTextureListFilter;
 use crate::errors::{AsterError, Result};
 use crate::runtime::AppState;
@@ -79,44 +83,52 @@ where
         .collect()
 }
 
-pub fn configure(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/wardrobe")
-            .route("/tags", web::get().to(list_texture_library_tags))
-            .route("/textures", web::get().to(list_wardrobe_textures))
-            .route(
-                "/textures/{texture_id}",
-                web::get().to(get_wardrobe_texture),
-            )
-            .route(
-                "/textures/{texture_type}",
-                web::post().to(upload_wardrobe_texture),
-            )
-            .route(
-                "/textures/{texture_id}",
-                web::patch().to(update_wardrobe_texture),
-            )
-            .route(
-                "/textures/{texture_id}/content",
-                web::put().to(replace_wardrobe_texture_content),
-            )
-            .route(
-                "/textures/{texture_id}/tags",
-                web::put().to(replace_wardrobe_texture_tags),
-            )
-            .route(
-                "/textures/{texture_id}/library-submission",
-                web::post().to(submit_texture_library_review),
-            )
-            .route(
-                "/textures/{texture_id}/library-submission",
-                web::delete().to(withdraw_texture_library_submission),
-            )
-            .route(
-                "/textures/{texture_id}",
-                web::delete().to(delete_wardrobe_texture),
-            ),
-    );
+pub fn routes(
+    rate_limits: &RateLimitConfig,
+    network_trust: &NetworkTrustConfig,
+) -> impl actix_web::dev::HttpServiceFactory + use<> {
+    let write_limiter =
+        rate_limit::build_governor(&rate_limits.write, &network_trust.trusted_proxies);
+
+    web::scope("/wardrobe")
+        .route("/tags", web::get().to(list_texture_library_tags))
+        .route("/textures", web::get().to(list_wardrobe_textures))
+        .route(
+            "/textures/{texture_id}",
+            web::get().to(get_wardrobe_texture),
+        )
+        .route(
+            "/textures/{texture_type}",
+            web::post().to(upload_wardrobe_texture),
+        )
+        .route(
+            "/textures/{texture_id}",
+            web::patch().to(update_wardrobe_texture),
+        )
+        .service(
+            web::resource("/textures/{texture_id}/content")
+                .wrap(Condition::new(
+                    rate_limits.enabled,
+                    Governor::new(&write_limiter),
+                ))
+                .route(web::put().to(replace_wardrobe_texture_content)),
+        )
+        .route(
+            "/textures/{texture_id}/tags",
+            web::put().to(replace_wardrobe_texture_tags),
+        )
+        .route(
+            "/textures/{texture_id}/library-submission",
+            web::post().to(submit_texture_library_review),
+        )
+        .route(
+            "/textures/{texture_id}/library-submission",
+            web::delete().to(withdraw_texture_library_submission),
+        )
+        .route(
+            "/textures/{texture_id}",
+            web::delete().to(delete_wardrobe_texture),
+        )
 }
 
 #[aster_forge_api_docs_macros::path(
@@ -583,6 +595,7 @@ pub async fn upload_wardrobe_texture(
         (status = 200, description = "Wardrobe texture content replaced", body = inline(ApiResponse<texture_service::MinecraftWardrobeTextureMetadata>)),
         (status = 400, description = "Invalid upload or texture"),
         (status = 401, description = "Unauthorized"),
+        (status = 409, description = "Texture was modified concurrently"),
         (status = 404, description = "Wardrobe texture not found"),
     ),
     security(("bearer" = [])),
@@ -613,31 +626,35 @@ pub async fn replace_wardrobe_texture_content(
     .map_err(texture_error_to_api_error);
     cleanup_upload_file(&upload.file_path).await;
     let replaced = replaced?;
+    let content_changed =
+        previous.hash != replaced.hash || previous.texture_model != replaced.texture_model;
 
-    let ctx = audit_service::AuditContext::from_request(&req, user.id);
-    audit_service::log_with_details(
-        state.get_ref(),
-        &ctx,
-        audit_service::AuditAction::MinecraftTextureEdit,
-        audit_service::AuditEntityType::MinecraftTexture,
-        Some(replaced.id),
-        Some(&replaced.name),
-        || {
-            audit_service::details(audit_service::MinecraftTextureAuditDetails {
-                profile_uuid: "",
-                profile_name: "",
-                texture_type: replaced.texture_type,
-                texture_hash: Some(&replaced.hash),
-                texture_model: Some(replaced.texture_model),
-                width: Some(replaced.width),
-                height: Some(replaced.height),
-                file_size: Some(replaced.file_size),
-                library_status: Some(replaced.library_status),
-                review_note: replaced.library_review_note.as_deref(),
-            })
-        },
-    )
-    .await;
+    if content_changed {
+        let ctx = audit_service::AuditContext::from_request(&req, user.id);
+        audit_service::log_with_details(
+            state.get_ref(),
+            &ctx,
+            audit_service::AuditAction::MinecraftTextureEdit,
+            audit_service::AuditEntityType::MinecraftTexture,
+            Some(replaced.id),
+            Some(&replaced.name),
+            || {
+                audit_service::details(audit_service::MinecraftTextureAuditDetails {
+                    profile_uuid: "",
+                    profile_name: "",
+                    texture_type: replaced.texture_type,
+                    texture_hash: Some(&replaced.hash),
+                    texture_model: Some(replaced.texture_model),
+                    width: Some(replaced.width),
+                    height: Some(replaced.height),
+                    file_size: Some(replaced.file_size),
+                    library_status: Some(replaced.library_status),
+                    review_note: replaced.library_review_note.as_deref(),
+                })
+            },
+        )
+        .await;
+    }
 
     Ok(HttpResponse::Ok().json(ApiResponse::ok(replaced)))
 }
@@ -939,6 +956,10 @@ fn texture_error_to_api_error(error: texture_service::TextureError) -> AsterErro
         ),
         texture_service::TextureErrorKind::NotFound => AsterError::record_not_found_code(
             AsterErrorCode::WardrobeTextureNotFound,
+            error.protocol_message(),
+        ),
+        texture_service::TextureErrorKind::Conflict => AsterError::conflict_code(
+            AsterErrorCode::WardrobeTextureEditConflict,
             error.protocol_message(),
         ),
         texture_service::TextureErrorKind::Storage => AsterError::internal_error_code(

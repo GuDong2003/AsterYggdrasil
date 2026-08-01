@@ -78,6 +78,7 @@ use self::maintenance::cleanup_texture_blob_if_unreferenced;
 
 const PNG_CONTENT_TYPE: &str = "image/png";
 const OFFICIAL_TEXTURE_DOWNLOAD_TIMEOUT_SECS: u64 = 10;
+const WARDROBE_REPLACE_MAX_ATTEMPTS: usize = 4;
 pub(crate) const TEXTURE_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 
 pub fn parse_texture_type(value: &str) -> std::result::Result<MinecraftTextureType, TextureError> {
@@ -1881,7 +1882,7 @@ where
             format!("wardrobe texture #{wardrobe_texture_id}"),
         ));
     }
-    let Some(existing) = minecraft_texture_repo::find_by_id_for_user(
+    let Some(mut existing) = minecraft_texture_repo::find_by_id_for_user(
         state.reader_db(),
         wardrobe_texture_id,
         user_id,
@@ -1975,44 +1976,87 @@ where
                 return Err(TextureError::from(error));
             }
         };
-    let updated = minecraft_texture_repo::replace_wardrobe_content_for_user(
-        state.writer_db(),
-        existing.clone(),
-        user_id,
-        minecraft_texture_repo::ReplaceWardrobeTextureContent {
-            hash: &processing.hash,
-            storage_key: &storage_key,
-            mime_type: PNG_CONTENT_TYPE,
-            file_size,
-            width,
-            height,
-            texture_model,
-        },
-    )
-    .await
-    .map_err(TextureError::from);
-    let updated = match updated {
-        Ok(Some(texture)) => texture,
-        Ok(None) => {
-            cleanup_texture_blob_if_unreferenced(
-                state,
-                &storage_key,
-                "wardrobe texture replacement ownership changed",
-            )
-            .await;
-            return Err(TextureError::with_detail(
-                TextureErrorKind::NotFound,
-                format!("wardrobe texture #{wardrobe_texture_id}"),
-            ));
-        }
-        Err(error) => {
-            cleanup_texture_blob_if_unreferenced(
-                state,
-                &storage_key,
-                "wardrobe texture replacement failure",
-            )
-            .await;
-            return Err(error);
+    let mut replacement_attempt = 0;
+    let updated = loop {
+        replacement_attempt += 1;
+        let replacement = minecraft_texture_repo::replace_wardrobe_content_for_user(
+            state.writer_db(),
+            existing.clone(),
+            user_id,
+            minecraft_texture_repo::ReplaceWardrobeTextureContent {
+                hash: &processing.hash,
+                storage_key: &storage_key,
+                mime_type: PNG_CONTENT_TYPE,
+                file_size,
+                width,
+                height,
+                texture_model,
+            },
+        )
+        .await
+        .map_err(TextureError::from);
+        match replacement {
+            Ok(Some(texture)) => break texture,
+            Ok(None) => {
+                let current = minecraft_texture_repo::find_by_id_for_user(
+                    state.writer_db(),
+                    wardrobe_texture_id,
+                    user_id,
+                )
+                .await;
+                let current = match current {
+                    Ok(current) => current,
+                    Err(error) => {
+                        cleanup_texture_blob_if_unreferenced(
+                            state,
+                            &storage_key,
+                            "wardrobe texture concurrent replacement lookup failure",
+                        )
+                        .await;
+                        return Err(TextureError::from(error));
+                    }
+                };
+                let Some(current) = current.filter(|texture| texture.is_wardrobe_item) else {
+                    cleanup_texture_blob_if_unreferenced(
+                        state,
+                        &storage_key,
+                        "wardrobe texture replacement ownership changed",
+                    )
+                    .await;
+                    return Err(TextureError::with_detail(
+                        TextureErrorKind::NotFound,
+                        format!("wardrobe texture #{wardrobe_texture_id}"),
+                    ));
+                };
+                if current.hash == processing.hash && current.texture_model == texture_model {
+                    break current;
+                }
+                if replacement_attempt >= WARDROBE_REPLACE_MAX_ATTEMPTS {
+                    cleanup_texture_blob_if_unreferenced(
+                        state,
+                        &storage_key,
+                        "wardrobe texture concurrent replacement conflict",
+                    )
+                    .await;
+                    return Err(TextureError::new(TextureErrorKind::Conflict));
+                }
+                tracing::debug!(
+                    user_id,
+                    texture_id = wardrobe_texture_id,
+                    replacement_attempt,
+                    "retrying concurrent wardrobe texture replacement"
+                );
+                existing = current;
+            }
+            Err(error) => {
+                cleanup_texture_blob_if_unreferenced(
+                    state,
+                    &storage_key,
+                    "wardrobe texture replacement failure",
+                )
+                .await;
+                return Err(error);
+            }
         }
     };
 

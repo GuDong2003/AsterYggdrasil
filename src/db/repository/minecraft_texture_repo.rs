@@ -565,6 +565,8 @@ pub async fn replace_wardrobe_content_for_user<C: ConnectionTrait>(
     if texture.user_id != user_id || !texture.is_wardrobe_item {
         return Ok(None);
     }
+    let texture_id = texture.id;
+    let expected_updated_at = texture.updated_at;
     let now = chrono::Utc::now();
     let mut active: minecraft_texture::ActiveModel = texture.into();
     active.source = Set(MinecraftTextureSource::Local);
@@ -581,11 +583,19 @@ pub async fn replace_wardrobe_content_for_user<C: ConnectionTrait>(
     active.library_reviewer_user_id = Set(None);
     active.library_review_note = Set(None);
     active.updated_at = Set(now);
-    active
-        .update(db)
+    let result = MinecraftTexture::update_many()
+        .set(active)
+        .filter(minecraft_texture::Column::Id.eq(texture_id))
+        .filter(minecraft_texture::Column::UserId.eq(user_id))
+        .filter(minecraft_texture::Column::IsWardrobeItem.eq(true))
+        .filter(minecraft_texture::Column::UpdatedAt.eq(expected_updated_at))
+        .exec(db)
         .await
-        .map(Some)
-        .map_aster_err(AsterError::database_operation)
+        .map_aster_err(AsterError::database_operation)?;
+    if result.rows_affected != 1 {
+        return Ok(None);
+    }
+    find_by_id_for_user(db, texture_id, user_id).await
 }
 
 pub async fn update_library_review<C: ConnectionTrait>(

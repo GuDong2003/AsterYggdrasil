@@ -873,6 +873,10 @@ fn texture_error_to_api_error(error: texture_service::TextureError) -> AsterErro
             AsterErrorCode::MinecraftTextureNotFound,
             error.protocol_message(),
         ),
+        texture_service::TextureErrorKind::Conflict => AsterError::conflict_code(
+            AsterErrorCode::MinecraftTextureBindConflict,
+            error.protocol_message(),
+        ),
         texture_service::TextureErrorKind::Storage => AsterError::internal_error_code(
             AsterErrorCode::MinecraftObjectStorageFailed,
             error.protocol_message(),

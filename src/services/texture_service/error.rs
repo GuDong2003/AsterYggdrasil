@@ -8,6 +8,7 @@ pub enum TextureErrorKind {
     InvalidToken,
     ForbiddenProfile,
     NotFound,
+    Conflict,
     InvalidContentType,
     MissingFile,
     InvalidPng,
@@ -47,6 +48,7 @@ impl TextureError {
             | TextureErrorKind::UploadDisabled
             | TextureErrorKind::UserBanForbidden => actix_web::http::StatusCode::FORBIDDEN,
             TextureErrorKind::NotFound => actix_web::http::StatusCode::NOT_FOUND,
+            TextureErrorKind::Conflict => actix_web::http::StatusCode::CONFLICT,
             TextureErrorKind::InvalidTextureType
             | TextureErrorKind::InvalidContentType
             | TextureErrorKind::MissingFile
@@ -63,6 +65,7 @@ impl TextureError {
             | TextureErrorKind::UploadDisabled
             | TextureErrorKind::UserBanForbidden => "ForbiddenOperationException",
             TextureErrorKind::NotFound => "IllegalArgumentException",
+            TextureErrorKind::Conflict => "IllegalArgumentException",
             TextureErrorKind::InvalidTextureType
             | TextureErrorKind::InvalidContentType
             | TextureErrorKind::MissingFile
@@ -87,6 +90,10 @@ impl TextureError {
                 .detail
                 .clone()
                 .unwrap_or_else(|| "Texture not found.".to_string()),
+            TextureErrorKind::Conflict => self
+                .detail
+                .clone()
+                .unwrap_or_else(|| "Texture was modified concurrently; try again.".to_string()),
             TextureErrorKind::InvalidContentType => "Texture file must be image/png.".to_string(),
             TextureErrorKind::MissingFile => "Texture upload file is missing.".to_string(),
             TextureErrorKind::InvalidPng => self

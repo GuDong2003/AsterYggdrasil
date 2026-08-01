@@ -1,10 +1,49 @@
+import { inferModelType } from "skinview-utils";
 import type { MinecraftTextureModel } from "@/types/api";
 
 export const SKIN_SIZE = 64;
 export const EDITOR_CANVAS_SIZE = 1024;
 
+export type SkinImageDimensions = {
+	legacy: boolean;
+	scale: number;
+	size: number;
+};
+
 export type SkinEditorLayer = "base" | "overlay";
 export type SkinEditorTool = "brush" | "eraser" | "picker" | "bucket";
+export type SkinEditorHistoryEntry =
+	| {
+			image: ImageData;
+			kind: "snapshot";
+			model: MinecraftTextureModel;
+			stateId: number;
+	  }
+	| {
+			colors: Uint32Array;
+			indices: Uint32Array;
+			kind: "pixels";
+			model: MinecraftTextureModel;
+			size: number;
+			stateId: number;
+	  };
+
+export type SkinEditorHistoryRestoreOperations = {
+	restoreSnapshot: (image: ImageData) => void;
+	snapshot: () => ImageData;
+	swapPixels: (
+		indices: Uint32Array,
+		colors: Uint32Array,
+		size: number,
+	) => Uint32Array;
+};
+
+export type SkinEditorHistoryRestoreResult = {
+	dirty: boolean;
+	inverse: SkinEditorHistoryEntry;
+	model: MinecraftTextureModel;
+	stateId: number;
+};
 export type SkinPart =
 	| "head"
 	| "body"
@@ -38,17 +77,6 @@ type SkinBox = {
 	v: number;
 	width: number;
 };
-
-const SLIM_EXCLUDED_REGIONS: SkinRect[] = [
-	[54, 16, 2, 4],
-	[54, 20, 2, 12],
-	[46, 48, 2, 4],
-	[46, 52, 2, 12],
-	[54, 32, 2, 4],
-	[54, 36, 2, 12],
-	[62, 48, 2, 4],
-	[62, 52, 2, 12],
-];
 
 function skinBoxes(
 	model: MinecraftTextureModel,
@@ -155,33 +183,44 @@ function boxFaces(box: SkinBox, layer: SkinEditorLayer): SkinFaceRegion[] {
 export function getSkinFaceRegions(
 	model: MinecraftTextureModel,
 	layer: SkinEditorLayer,
+	skinSize = SKIN_SIZE,
 ): SkinFaceRegion[] {
-	return skinBoxes(model, layer).flatMap((box) => boxFaces(box, layer));
+	const scale = skinScale(skinSize);
+	return skinBoxes(model, layer)
+		.flatMap((box) => boxFaces(box, layer))
+		.map((region) => ({
+			...region,
+			height: region.height * scale,
+			width: region.width * scale,
+			x: region.x * scale,
+			y: region.y * scale,
+		}));
 }
 
 export function getSkinRegions(
 	model: MinecraftTextureModel,
 	layer: SkinEditorLayer,
+	skinSize = SKIN_SIZE,
 ): SkinRect[] {
-	return getSkinFaceRegions(model, layer).map(
+	return getSkinFaceRegions(model, layer, skinSize).map(
 		(region) => [region.x, region.y, region.width, region.height] as const,
 	);
 }
 
-export function buildSkinMask(regions: readonly SkinRect[]): Uint8Array {
-	const mask = new Uint8Array(SKIN_SIZE * SKIN_SIZE);
+export function buildSkinMask(
+	regions: readonly SkinRect[],
+	skinSize = SKIN_SIZE,
+): Uint8Array {
+	skinScale(skinSize);
+	const mask = new Uint8Array(skinSize * skinSize);
 	for (const [x, y, width, height] of regions) {
 		for (let offsetY = 0; offsetY < height; offsetY += 1) {
 			for (let offsetX = 0; offsetX < width; offsetX += 1) {
-				mask[(y + offsetY) * SKIN_SIZE + x + offsetX] = 1;
+				mask[(y + offsetY) * skinSize + x + offsetX] = 1;
 			}
 		}
 	}
 	return mask;
-}
-
-export function getSlimExcludedMask(): Uint8Array {
-	return buildSkinMask(SLIM_EXCLUDED_REGIONS);
 }
 
 export function getFaceAt(
@@ -200,6 +239,165 @@ export function getFaceAt(
 	);
 }
 
+export function detectSkinModel(
+	canvas: HTMLCanvasElement,
+	sourceWasLegacy = false,
+): MinecraftTextureModel {
+	skinScale(canvas.width);
+	if (canvas.width !== canvas.height) throw new Error("invalid_skin_canvas");
+	return sourceWasLegacy ? "default" : inferModelType(canvas);
+}
+
+export function floodFillSkinPixels(
+	pixels: Uint8ClampedArray,
+	skinSize: number,
+	mask: Uint8Array,
+	startX: number,
+	startY: number,
+	replacement: readonly [number, number, number, number],
+): boolean {
+	skinScale(skinSize);
+	if (
+		pixels.byteLength !== skinSize * skinSize * 4 ||
+		mask.byteLength !== skinSize * skinSize
+	) {
+		throw new Error("invalid_skin_buffer");
+	}
+	if (
+		!Number.isSafeInteger(startX) ||
+		!Number.isSafeInteger(startY) ||
+		startX < 0 ||
+		startX >= skinSize ||
+		startY < 0 ||
+		startY >= skinSize
+	) {
+		return false;
+	}
+	const startIndex = startY * skinSize + startX;
+	if (!mask[startIndex]) return false;
+	const offset = startIndex * 4;
+	const target = [
+		pixels[offset],
+		pixels[offset + 1],
+		pixels[offset + 2],
+		pixels[offset + 3],
+	] as const;
+	if (target.every((channel, index) => channel === replacement[index])) {
+		return false;
+	}
+
+	const queue = new Uint32Array(skinSize * skinSize);
+	let head = 0;
+	let tail = 0;
+	const enqueue = (index: number) => {
+		if (!mask[index]) return;
+		const pixelOffset = index * 4;
+		if (
+			pixels[pixelOffset] !== target[0] ||
+			pixels[pixelOffset + 1] !== target[1] ||
+			pixels[pixelOffset + 2] !== target[2] ||
+			pixels[pixelOffset + 3] !== target[3]
+		) {
+			return;
+		}
+		pixels[pixelOffset] = replacement[0];
+		pixels[pixelOffset + 1] = replacement[1];
+		pixels[pixelOffset + 2] = replacement[2];
+		pixels[pixelOffset + 3] = replacement[3];
+		queue[tail] = index;
+		tail += 1;
+	};
+	enqueue(startIndex);
+	while (head < tail) {
+		const index = queue[head];
+		head += 1;
+		const x = index % skinSize;
+		const y = Math.floor(index / skinSize);
+		if (x > 0) enqueue(index - 1);
+		if (x + 1 < skinSize) enqueue(index + 1);
+		if (y > 0) enqueue(index - skinSize);
+		if (y + 1 < skinSize) enqueue(index + skinSize);
+	}
+	return tail > 0;
+}
+
+export function swapPackedPixelColors(
+	pixels: Uint8ClampedArray,
+	colors: Uint32Array,
+): Uint32Array {
+	if (pixels.byteLength !== colors.length * 4) {
+		throw new Error("invalid_skin_history");
+	}
+	const previous = new Uint32Array(colors.length);
+	for (let index = 0; index < colors.length; index += 1) {
+		const offset = index * 4;
+		previous[index] =
+			(pixels[offset] |
+				(pixels[offset + 1] << 8) |
+				(pixels[offset + 2] << 16) |
+				(pixels[offset + 3] << 24)) >>>
+			0;
+		const color = colors[index];
+		pixels[offset] = color & 0xff;
+		pixels[offset + 1] = (color >>> 8) & 0xff;
+		pixels[offset + 2] = (color >>> 16) & 0xff;
+		pixels[offset + 3] = (color >>> 24) & 0xff;
+	}
+	return previous;
+}
+
+export function restoreSkinHistoryEntry(
+	entry: SkinEditorHistoryEntry,
+	current: {
+		model: MinecraftTextureModel;
+		savedStateId: number;
+		size: number;
+		stateId: number;
+	},
+	operations: SkinEditorHistoryRestoreOperations,
+): SkinEditorHistoryRestoreResult {
+	skinScale(current.size);
+	let inverse: SkinEditorHistoryEntry;
+	if (entry.kind === "snapshot") {
+		skinScale(entry.image.width);
+		if (entry.image.width !== entry.image.height) {
+			throw new Error("invalid_skin_history");
+		}
+		const currentImage = operations.snapshot();
+		if (
+			currentImage.width !== current.size ||
+			currentImage.height !== current.size
+		) {
+			throw new Error("invalid_skin_history");
+		}
+		inverse = {
+			image: currentImage,
+			kind: "snapshot",
+			model: current.model,
+			stateId: current.stateId,
+		};
+		operations.restoreSnapshot(entry.image);
+	} else {
+		if (entry.size !== current.size) {
+			throw new Error("invalid_skin_history");
+		}
+		inverse = {
+			colors: operations.swapPixels(entry.indices, entry.colors, entry.size),
+			indices: entry.indices,
+			kind: "pixels",
+			model: current.model,
+			size: entry.size,
+			stateId: current.stateId,
+		};
+	}
+	return {
+		dirty: entry.stateId !== current.savedStateId,
+		inverse,
+		model: entry.model,
+		stateId: entry.stateId,
+	};
+}
+
 function clearRegions(
 	context: CanvasRenderingContext2D,
 	regions: readonly SkinRect[],
@@ -216,7 +414,23 @@ function hasTransparency(imageData: ImageData): boolean {
 	return false;
 }
 
-function convertLegacySkin(context: CanvasRenderingContext2D) {
+function skinScale(skinSize: number): number {
+	const scale = skinSize / SKIN_SIZE;
+	if (!Number.isSafeInteger(scale) || scale < 1) {
+		throw new Error(`invalid_skin_size:${skinSize}`);
+	}
+	return scale;
+}
+
+function scaleRects(rects: readonly SkinRect[], skinSize: number): SkinRect[] {
+	const scale = skinScale(skinSize);
+	return rects.map(
+		([x, y, width, height]) =>
+			[x * scale, y * scale, width * scale, height * scale] as const,
+	);
+}
+
+function convertLegacySkin(context: CanvasRenderingContext2D, scale: number) {
 	// Adapted from skinview-utils' MIT-licensed 1.7 -> 1.8 conversion.
 	// See THIRD_PARTY_NOTICES.md.
 	// copied limb faces are mirrored and placed into the separate left limb UVs.
@@ -232,14 +446,14 @@ function convertLegacySkin(context: CanvasRenderingContext2D) {
 	) => {
 		context.drawImage(
 			context.canvas,
-			sourceX,
-			sourceY,
-			width,
-			height,
-			-destinationX,
-			destinationY,
-			-width,
-			height,
+			sourceX * scale,
+			sourceY * scale,
+			width * scale,
+			height * scale,
+			-destinationX * scale,
+			destinationY * scale,
+			-width * scale,
+			height * scale,
 		);
 	};
 	copy(4, 16, 4, 4, 20, 48);
@@ -257,48 +471,61 @@ function convertLegacySkin(context: CanvasRenderingContext2D) {
 	context.restore();
 }
 
-export function normalizeSkinImage(
-	image: CanvasImageSource & { height: number; width: number },
-): HTMLCanvasElement {
-	const width = image.width;
-	const height = image.height;
+export function analyzeSkinImageDimensions(
+	width: number,
+	height: number,
+	maxPixels = Number.POSITIVE_INFINITY,
+): SkinImageDimensions {
 	const modern = width === height && width % SKIN_SIZE === 0;
 	const legacy =
 		width === height * 2 &&
 		width % SKIN_SIZE === 0 &&
 		height % (SKIN_SIZE / 2) === 0;
-	if (!modern && !legacy) {
+	if (
+		!Number.isSafeInteger(width) ||
+		!Number.isSafeInteger(height) ||
+		width <= 0 ||
+		height <= 0 ||
+		(!modern && !legacy)
+	) {
 		throw new Error(`invalid_skin_dimensions:${width}x${height}`);
 	}
+	if (width * width > maxPixels) {
+		throw new Error(`skin_pixel_limit_exceeded:${width}x${height}`);
+	}
+	return {
+		legacy,
+		scale: width / SKIN_SIZE,
+		size: width,
+	};
+}
+
+export function normalizeSkinImage(
+	image: CanvasImageSource & { height: number; width: number },
+	maxPixels = Number.POSITIVE_INFINITY,
+): HTMLCanvasElement {
+	const width = image.width;
+	const height = image.height;
+	const dimensions = analyzeSkinImageDimensions(width, height, maxPixels);
 
 	const canvas = document.createElement("canvas");
-	canvas.width = SKIN_SIZE;
-	canvas.height = SKIN_SIZE;
+	canvas.width = dimensions.size;
+	canvas.height = dimensions.size;
 	const context = canvas.getContext("2d", { willReadFrequently: true });
 	if (!context) throw new Error("canvas_context_unavailable");
 	context.imageSmoothingEnabled = false;
-	context.clearRect(0, 0, SKIN_SIZE, SKIN_SIZE);
-	context.drawImage(
-		image,
-		0,
-		0,
-		width,
-		height,
-		0,
-		0,
-		SKIN_SIZE,
-		legacy ? SKIN_SIZE / 2 : SKIN_SIZE,
-	);
+	context.clearRect(0, 0, dimensions.size, dimensions.size);
+	context.drawImage(image, 0, 0, width, height);
 
-	const sourceHeight = legacy ? SKIN_SIZE / 2 : SKIN_SIZE;
-	const source = context.getImageData(0, 0, SKIN_SIZE, sourceHeight);
-	if (legacy) {
-		convertLegacySkin(context);
+	if (dimensions.legacy) {
+		const source = context.getImageData(0, 0, width, height);
+		convertLegacySkin(context, dimensions.scale);
 		if (!hasTransparency(source)) {
-			clearRegions(context, getSkinRegions("default", "overlay"));
+			clearRegions(
+				context,
+				getSkinRegions("default", "overlay", dimensions.size),
+			);
 		}
-	} else if (!hasTransparency(source)) {
-		clearRegions(context, getSkinRegions("default", "overlay"));
 	}
 	return canvas;
 }
@@ -308,6 +535,7 @@ function copyFace(
 	destination: Uint32Array,
 	sourceRect: SkinRect,
 	destinationRect: SkinRect,
+	skinSize: number,
 ) {
 	const [sourceX, sourceY, sourceWidth, sourceHeight] = sourceRect;
 	const [destinationX, destinationY, destinationWidth, destinationHeight] =
@@ -326,8 +554,8 @@ function copyFace(
 					sourceWidth - 1,
 					Math.floor((x * sourceWidth) / destinationWidth),
 				);
-			destination[(destinationY + y) * SKIN_SIZE + destinationX + x] =
-				source[sampleY * SKIN_SIZE + sampleX];
+			destination[(destinationY + y) * skinSize + destinationX + x] =
+				source[sampleY * skinSize + sampleX];
 		}
 	}
 }
@@ -336,9 +564,11 @@ export function repackSkinModelPixels(
 	data: Uint8ClampedArray,
 	fromModel: MinecraftTextureModel,
 	toModel: MinecraftTextureModel,
+	skinSize = SKIN_SIZE,
 ) {
 	if (fromModel === toModel) return;
-	if (data.byteLength !== SKIN_SIZE * SKIN_SIZE * 4) {
+	skinScale(skinSize);
+	if (data.byteLength !== skinSize * skinSize * 4) {
 		throw new Error("invalid_skin_buffer");
 	}
 	const destination = new Uint32Array(
@@ -351,7 +581,7 @@ export function repackSkinModelPixels(
 		const [x, y, width, height] = rect;
 		for (let offsetY = 0; offsetY < height; offsetY += 1) {
 			for (let offsetX = 0; offsetX < width; offsetX += 1) {
-				destination[(y + offsetY) * SKIN_SIZE + x + offsetX] = 0;
+				destination[(y + offsetY) * skinSize + x + offsetX] = 0;
 			}
 		}
 	};
@@ -361,14 +591,14 @@ export function repackSkinModelPixels(
 		[32, 48, 16, 16],
 		[48, 48, 16, 16],
 	] as const satisfies readonly SkinRect[]) {
-		clear(rect);
+		clear(scaleRects([rect], skinSize)[0]);
 	}
 
 	for (const layer of ["base", "overlay"] as const) {
-		const fromRegions = getSkinFaceRegions(fromModel, layer).filter(
+		const fromRegions = getSkinFaceRegions(fromModel, layer, skinSize).filter(
 			(region) => region.part === "rightArm" || region.part === "leftArm",
 		);
-		const toRegions = getSkinFaceRegions(toModel, layer).filter(
+		const toRegions = getSkinFaceRegions(toModel, layer, skinSize).filter(
 			(region) => region.part === "rightArm" || region.part === "leftArm",
 		);
 		for (let index = 0; index < fromRegions.length; index += 1) {
@@ -379,11 +609,9 @@ export function repackSkinModelPixels(
 				destination,
 				[from.x, from.y, from.width, from.height],
 				[to.x, to.y, to.width, to.height],
+				skinSize,
 			);
 		}
-	}
-	if (toModel === "slim") {
-		for (const rect of SLIM_EXCLUDED_REGIONS) clear(rect);
 	}
 }
 
@@ -395,8 +623,9 @@ export function repackSkinCanvasModel(
 	if (fromModel === toModel) return;
 	const context = canvas.getContext("2d", { willReadFrequently: true });
 	if (!context) throw new Error("canvas_context_unavailable");
-	const imageData = context.getImageData(0, 0, SKIN_SIZE, SKIN_SIZE);
-	repackSkinModelPixels(imageData.data, fromModel, toModel);
+	if (canvas.width !== canvas.height) throw new Error("invalid_skin_canvas");
+	const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+	repackSkinModelPixels(imageData.data, fromModel, toModel, canvas.width);
 	context.putImageData(imageData, 0, 0);
 }
 

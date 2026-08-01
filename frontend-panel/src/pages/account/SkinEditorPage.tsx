@@ -20,30 +20,37 @@ import {
 } from "@/components/yggdrasil/MinecraftPreview";
 import { usePageTitle } from "@/hooks/usePageTitle";
 import {
+	analyzeSkinImageDimensions,
 	buildSkinMask,
+	detectSkinModel,
 	EDITOR_CANVAS_SIZE,
+	floodFillSkinPixels,
 	getFaceAt,
 	getSkinFaceRegions,
 	getSkinRegions,
-	imageDataEquals,
 	normalizeSkinImage,
 	repackSkinCanvasModel,
+	restoreSkinHistoryEntry,
 	SKIN_SIZE,
+	type SkinEditorHistoryEntry,
 	type SkinEditorLayer,
 	type SkinEditorTool,
 	type SkinFaceRegion,
+	type SkinRect,
 	skinCanvasToBlob,
+	swapPackedPixelColors,
 } from "@/lib/skinEditor";
 import { cn } from "@/lib/utils";
 import { accountPaths, accountWardrobeEditorPath } from "@/routes/routePaths";
 import { formatUnknownError } from "@/services/http";
 import { yggdrasilService } from "@/services/yggdrasilService";
+import { useFrontendConfigStore } from "@/stores/frontendConfigStore";
 import type {
 	MinecraftTextureModel,
 	MinecraftWardrobeTextureMetadata,
 } from "@/types/api";
 
-type EditorSnapshot = {
+type SavedSnapshot = {
 	image: ImageData;
 	model: MinecraftTextureModel;
 };
@@ -56,6 +63,8 @@ type NavigatorRect = {
 };
 
 const HISTORY_LIMIT = 100;
+const HISTORY_MEMORY_LIMIT = 128 * 1024 * 1024;
+const DEFAULT_MAX_TEXTURE_PIXELS = 4096 * 4096;
 const TOOL_ICONS: Record<SkinEditorTool, IconName> = {
 	brush: "PaintBrush",
 	eraser: "Eraser",
@@ -108,12 +117,109 @@ function safeFileName(value: string) {
 	return normalized || "minecraft-skin";
 }
 
+function historyEntryByteLength(entry: SkinEditorHistoryEntry) {
+	return entry.kind === "snapshot"
+		? entry.image.data.byteLength
+		: entry.indices.byteLength + entry.colors.byteLength;
+}
+
+function pushBoundedHistory(
+	entries: SkinEditorHistoryEntry[],
+	entry: SkinEditorHistoryEntry,
+) {
+	entries.push(entry);
+	let bytes = entries.reduce(
+		(total, candidate) => total + historyEntryByteLength(candidate),
+		0,
+	);
+	while (
+		entries.length > 1 &&
+		(entries.length > HISTORY_LIMIT || bytes > HISTORY_MEMORY_LIMIT)
+	) {
+		const removed = entries.shift();
+		if (removed) bytes -= historyEntryByteLength(removed);
+	}
+}
+
+function packedPixel(data: Uint8ClampedArray, offset = 0) {
+	return (
+		(data[offset] |
+			(data[offset + 1] << 8) |
+			(data[offset + 2] << 16) |
+			(data[offset + 3] << 24)) >>>
+		0
+	);
+}
+
+function swapPixelColors(
+	context: CanvasRenderingContext2D,
+	indices: Uint32Array,
+	colors: Uint32Array,
+	skinSize: number,
+) {
+	const previous = new Uint32Array(indices.length);
+	let cursor = 0;
+	while (cursor < indices.length) {
+		const firstIndex = indices[cursor];
+		const row = Math.floor(firstIndex / skinSize);
+		let end = cursor + 1;
+		while (
+			end < indices.length &&
+			indices[end] === indices[end - 1] + 1 &&
+			Math.floor(indices[end] / skinSize) === row
+		) {
+			end += 1;
+		}
+		const x = firstIndex % skinSize;
+		const image = context.getImageData(x, row, end - cursor, 1);
+		previous.set(
+			swapPackedPixelColors(image.data, colors.subarray(cursor, end)),
+			cursor,
+		);
+		context.putImageData(image, x, row);
+		cursor = end;
+	}
+	return previous;
+}
+
+function drawSkinRegions(
+	context: CanvasRenderingContext2D,
+	source: HTMLCanvasElement,
+	regions: readonly SkinRect[],
+	targetSize: number,
+	alpha = 1,
+) {
+	const scale = targetSize / source.width;
+	context.save();
+	context.globalAlpha = alpha;
+	context.imageSmoothingEnabled = false;
+	for (const [x, y, width, height] of regions) {
+		context.drawImage(
+			source,
+			x,
+			y,
+			width,
+			height,
+			x * scale,
+			y * scale,
+			width * scale,
+			height * scale,
+		);
+	}
+	context.restore();
+}
+
 export default function SkinEditorPage() {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const params = useParams<{ textureId: string }>();
 	const textureId = Number(params.textureId);
 	const validTextureId = Number.isSafeInteger(textureId) && textureId > 0;
+	const yggdrasilConfig = useFrontendConfigStore((store) => store.yggdrasil);
+	const maxTexturePixels =
+		yggdrasilConfig?.max_texture_pixels ?? DEFAULT_MAX_TEXTURE_PIXELS;
+	const maxTextureUploadBytes =
+		yggdrasilConfig?.max_texture_upload_bytes ?? 4 * 1024 * 1024;
 	const fullCanvasRef = useRef<HTMLCanvasElement | null>(null);
 	const editorCanvasRef = useRef<HTMLCanvasElement | null>(null);
 	const navigatorCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -121,14 +227,25 @@ export default function SkinEditorPage() {
 	const overlayThumbnailRef = useRef<HTMLCanvasElement | null>(null);
 	const viewportRef = useRef<HTMLDivElement | null>(null);
 	const importInputRef = useRef<HTMLInputElement | null>(null);
-	const historyRef = useRef<EditorSnapshot[]>([]);
-	const redoRef = useRef<EditorSnapshot[]>([]);
-	const originalRef = useRef<EditorSnapshot | null>(null);
+	const historyRef = useRef<SkinEditorHistoryEntry[]>([]);
+	const redoRef = useRef<SkinEditorHistoryEntry[]>([]);
+	const originalRef = useRef<SavedSnapshot | null>(null);
+	const pendingHistoryRef = useRef<SkinEditorHistoryEntry | null>(null);
+	const strokeBeforeRef = useRef<Map<number, number> | null>(null);
+	const currentStateIdRef = useRef(0);
+	const savedStateIdRef = useRef(0);
+	const nextStateIdRef = useRef(1);
+	const undoActionRef = useRef<() => void>(() => undefined);
+	const redoActionRef = useRef<() => void>(() => undefined);
 	const drawingRef = useRef(false);
 	const strokeChangedRef = useRef(false);
 	const lastPixelRef = useRef<[number, number] | null>(null);
 	const previewUrlRef = useRef<string | null>(null);
+	const renderFrameRef = useRef<number | null>(null);
+	const renderPreviewPixelRef = useRef<[number, number] | undefined>(undefined);
 	const allowNavigationRef = useRef(false);
+	const modelRef = useRef<MinecraftTextureModel>("default");
+	const savingModeRef = useRef<"replace" | "copy" | null>(null);
 
 	const [texture, setTexture] =
 		useState<MinecraftWardrobeTextureMetadata | null>(null);
@@ -140,6 +257,7 @@ export default function SkinEditorPage() {
 	const [tool, setTool] = useState<SkinEditorTool>("brush");
 	const [layer, setLayer] = useState<SkinEditorLayer>("base");
 	const [model, setModel] = useState<MinecraftTextureModel>("default");
+	const [skinSize, setSkinSize] = useState(SKIN_SIZE);
 	const [brushColor, setBrushColor] = useState("#ef4444");
 	const [brushSize, setBrushSize] = useState(1);
 	const [gridVisible, setGridVisible] = useState(true);
@@ -160,6 +278,14 @@ export default function SkinEditorPage() {
 		top: 0,
 		width: 100,
 	});
+	const setCurrentModel = useCallback((nextModel: MinecraftTextureModel) => {
+		modelRef.current = nextModel;
+		setModel(nextModel);
+	}, []);
+
+	useEffect(() => {
+		savingModeRef.current = savingMode;
+	}, [savingMode]);
 
 	usePageTitle(
 		texture
@@ -167,19 +293,34 @@ export default function SkinEditorPage() {
 			: t("skinEditor.pageTitle"),
 	);
 
+	const baseRegions = useMemo(
+		() => getSkinRegions(model, "base", skinSize),
+		[model, skinSize],
+	);
+	const overlayRegions = useMemo(
+		() => getSkinRegions(model, "overlay", skinSize),
+		[model, skinSize],
+	);
 	const baseMask = useMemo(
-		() => buildSkinMask(getSkinRegions(model, "base")),
-		[model],
+		() => buildSkinMask(baseRegions, skinSize),
+		[baseRegions, skinSize],
 	);
 	const overlayMask = useMemo(
-		() => buildSkinMask(getSkinRegions(model, "overlay")),
-		[model],
+		() => buildSkinMask(overlayRegions, skinSize),
+		[overlayRegions, skinSize],
 	);
 	const activeMask = layer === "base" ? baseMask : overlayMask;
 	const faceRegions = useMemo(
-		() => getSkinFaceRegions(model, layer),
-		[model, layer],
+		() => getSkinFaceRegions(model, layer, skinSize),
+		[model, layer, skinSize],
 	);
+	const editorCanvasSize = Math.max(EDITOR_CANVAS_SIZE, skinSize);
+	const maxZoom = Math.max(4, skinSize / SKIN_SIZE);
+	const zoomStep = Math.max(0.25, skinSize / SKIN_SIZE / 16);
+
+	useEffect(() => {
+		setZoom((value) => Math.min(value, maxZoom));
+	}, [maxZoom]);
 
 	const blocker = useBlocker(
 		useCallback(() => dirty && !allowNavigationRef.current, [dirty]),
@@ -208,26 +349,41 @@ export default function SkinEditorPage() {
 		return context;
 	}, []);
 
+	const resizeFullCanvas = useCallback((nextSize: number) => {
+		const canvas = fullCanvasRef.current;
+		if (!canvas) throw new Error("canvas_context_unavailable");
+		if (canvas.width !== nextSize || canvas.height !== nextSize) {
+			canvas.width = nextSize;
+			canvas.height = nextSize;
+		}
+		setSkinSize(nextSize);
+	}, []);
+
 	const currentSnapshot = useCallback(
-		(nextModel = model): EditorSnapshot => ({
-			image: getFullContext().getImageData(0, 0, SKIN_SIZE, SKIN_SIZE),
+		(
+			nextModel = model,
+		): Extract<SkinEditorHistoryEntry, { kind: "snapshot" }> => ({
+			image: getFullContext().getImageData(
+				0,
+				0,
+				fullCanvasRef.current?.width ?? skinSize,
+				fullCanvasRef.current?.height ?? skinSize,
+			),
+			kind: "snapshot",
 			model: nextModel,
+			stateId: currentStateIdRef.current,
 		}),
-		[getFullContext, model],
+		[getFullContext, model, skinSize],
 	);
 
-	const updateDirtyState = useCallback(
-		(nextModel = model) => {
-			const original = originalRef.current;
-			if (!original) {
-				setDirty(false);
-				return;
-			}
-			const current = getFullContext().getImageData(0, 0, SKIN_SIZE, SKIN_SIZE);
-			setDirty(
-				nextModel !== original.model ||
-					!imageDataEquals(current, original.image),
-			);
+	const currentSavedSnapshot = useCallback(
+		(nextModel = model): SavedSnapshot => {
+			const canvas = fullCanvasRef.current;
+			if (!canvas) throw new Error("canvas_context_unavailable");
+			return {
+				image: getFullContext().getImageData(0, 0, canvas.width, canvas.height),
+				model: nextModel,
+			};
 		},
 		[getFullContext, model],
 	);
@@ -248,103 +404,94 @@ export default function SkinEditorPage() {
 	}, []);
 
 	const drawThumbnail = useCallback(
-		(canvas: HTMLCanvasElement | null, mask?: Uint8Array) => {
-			if (!canvas || !fullCanvasRef.current) return;
+		(canvas: HTMLCanvasElement | null, layers: "base" | "both" | "overlay") => {
+			const source = fullCanvasRef.current;
+			if (!canvas || !source) return;
 			const context = canvas.getContext("2d");
 			if (!context) return;
-			context.imageSmoothingEnabled = false;
-			context.clearRect(0, 0, SKIN_SIZE, SKIN_SIZE);
-			if (!mask) {
-				context.drawImage(fullCanvasRef.current, 0, 0);
-				return;
+			context.clearRect(0, 0, canvas.width, canvas.height);
+			if (layers !== "overlay") {
+				drawSkinRegions(context, source, baseRegions, canvas.width);
 			}
-			const source = getFullContext().getImageData(0, 0, SKIN_SIZE, SKIN_SIZE);
-			const output = context.createImageData(SKIN_SIZE, SKIN_SIZE);
-			for (let index = 0; index < mask.length; index += 1) {
-				if (!mask[index]) continue;
-				const offset = index * 4;
-				output.data[offset] = source.data[offset];
-				output.data[offset + 1] = source.data[offset + 1];
-				output.data[offset + 2] = source.data[offset + 2];
-				output.data[offset + 3] = source.data[offset + 3];
+			if (layers !== "base") {
+				drawSkinRegions(context, source, overlayRegions, canvas.width);
 			}
-			context.putImageData(output, 0, 0);
 		},
-		[getFullContext],
+		[baseRegions, overlayRegions],
 	);
 
 	const renderEditor = useCallback(
 		(brushPreview?: [number, number]) => {
 			const canvas = editorCanvasRef.current;
-			if (!canvas || !fullCanvasRef.current) return;
+			const source = fullCanvasRef.current;
+			if (!canvas || !source) return;
 			const context = canvas.getContext("2d");
 			if (!context) return;
-			const full = getFullContext().getImageData(0, 0, SKIN_SIZE, SKIN_SIZE);
-			const cell = EDITOR_CANVAS_SIZE / SKIN_SIZE;
-			context.clearRect(0, 0, EDITOR_CANVAS_SIZE, EDITOR_CANVAS_SIZE);
+			const renderSize = canvas.width;
+			const cell = renderSize / skinSize;
+			const visibleRegions = overlayVisible
+				? [...baseRegions, ...overlayRegions]
+				: baseRegions;
+			context.clearRect(0, 0, renderSize, renderSize);
 			context.fillStyle = "#15191f";
-			context.fillRect(0, 0, EDITOR_CANVAS_SIZE, EDITOR_CANVAS_SIZE);
-
-			for (let y = 0; y < SKIN_SIZE; y += 1) {
-				for (let x = 0; x < SKIN_SIZE; x += 1) {
-					const index = y * SKIN_SIZE + x;
-					const used = baseMask[index] || overlayMask[index];
-					if (!used || (!overlayVisible && overlayMask[index])) continue;
-					const offset = index * 4;
-					const alpha = full.data[offset + 3];
-					if (alpha === 0) {
-						context.fillStyle = (x + y) % 2 === 0 ? "#343a43" : "#2a2f37";
-					} else if (activeMask[index]) {
-						context.fillStyle = `rgba(${full.data[offset]},${full.data[offset + 1]},${full.data[offset + 2]},${alpha / 255})`;
-					} else {
-						context.fillStyle = `rgba(${Math.round(full.data[offset] * 0.32)},${Math.round(full.data[offset + 1] * 0.32)},${Math.round(full.data[offset + 2] * 0.32)},${Math.max(0.24, (alpha / 255) * 0.5)})`;
-					}
-					context.fillRect(x * cell, y * cell, cell, cell);
-				}
+			context.fillRect(0, 0, renderSize, renderSize);
+			context.fillStyle = "#2a3038";
+			for (const [x, y, width, height] of visibleRegions) {
+				context.fillRect(x * cell, y * cell, width * cell, height * cell);
 			}
 
-			context.fillStyle = "rgba(16, 185, 129, 0.08)";
-			for (let index = 0; index < activeMask.length; index += 1) {
-				if (!activeMask[index]) continue;
-				if (!overlayVisible && overlayMask[index]) continue;
-				context.fillRect(
-					(index % SKIN_SIZE) * cell,
-					Math.floor(index / SKIN_SIZE) * cell,
-					cell,
-					cell,
+			drawSkinRegions(
+				context,
+				source,
+				baseRegions,
+				renderSize,
+				layer === "base" ? 1 : 0.48,
+			);
+			if (overlayVisible) {
+				drawSkinRegions(
+					context,
+					source,
+					overlayRegions,
+					renderSize,
+					layer === "overlay" ? 1 : 0.48,
 				);
 			}
 
-			if (gridVisible) {
+			context.fillStyle = "rgba(16, 185, 129, 0.08)";
+			for (const [x, y, width, height] of layer === "base"
+				? baseRegions
+				: overlayRegions) {
+				context.fillRect(x * cell, y * cell, width * cell, height * cell);
+			}
+
+			const cssCell = canvas.getBoundingClientRect().width / skinSize;
+			if (gridVisible && cssCell >= 4) {
 				context.strokeStyle = "rgba(255, 255, 255, 0.08)";
-				context.lineWidth = 1;
-				for (let index = 0; index <= SKIN_SIZE; index += 1) {
+				context.lineWidth = Math.max(1, cell / 16);
+				context.beginPath();
+				for (let index = 0; index <= skinSize; index += 1) {
 					const position = index * cell;
-					context.beginPath();
 					context.moveTo(position, 0);
-					context.lineTo(position, EDITOR_CANVAS_SIZE);
-					context.stroke();
-					context.beginPath();
+					context.lineTo(position, renderSize);
 					context.moveTo(0, position);
-					context.lineTo(EDITOR_CANVAS_SIZE, position);
-					context.stroke();
+					context.lineTo(renderSize, position);
 				}
+				context.stroke();
 			}
 			context.strokeStyle = "rgba(255, 255, 255, 0.2)";
-			context.lineWidth = 2;
-			for (let index = 0; index <= SKIN_SIZE; index += 8) {
+			context.lineWidth = Math.max(1, cell / 8);
+			context.beginPath();
+			const majorStep = 8 * (skinSize / SKIN_SIZE);
+			for (let index = 0; index <= skinSize; index += majorStep) {
 				const position = index * cell;
-				context.beginPath();
 				context.moveTo(position, 0);
-				context.lineTo(position, EDITOR_CANVAS_SIZE);
-				context.stroke();
-				context.beginPath();
+				context.lineTo(position, renderSize);
 				context.moveTo(0, position);
-				context.lineTo(EDITOR_CANVAS_SIZE, position);
-				context.stroke();
+				context.lineTo(renderSize, position);
 			}
+			context.stroke();
 			context.strokeStyle = "rgba(52, 211, 153, 0.52)";
-			context.lineWidth = 2;
+			context.lineWidth = Math.max(1, cell / 8);
 			for (const face of faceRegions) {
 				context.strokeRect(
 					face.x * cell + 1,
@@ -362,10 +509,10 @@ export default function SkinEditorPage() {
 				const width = hoveredRegion.width * cell;
 				const height = hoveredRegion.height * cell;
 				context.strokeStyle = "rgba(5, 5, 5, 0.94)";
-				context.lineWidth = 6;
+				context.lineWidth = Math.max(2, cell / 2);
 				context.strokeRect(x + 2, y + 2, width - 4, height - 4);
 				context.strokeStyle = "rgba(255, 255, 255, 0.96)";
-				context.lineWidth = 3;
+				context.lineWidth = Math.max(1, cell / 4);
 				context.strokeRect(x + 2, y + 2, width - 4, height - 4);
 			}
 			if (brushPreview && (tool === "brush" || tool === "eraser")) {
@@ -385,10 +532,10 @@ export default function SkinEditorPage() {
 						const y = pixelY + offsetY;
 						if (
 							x < 0 ||
-							x >= SKIN_SIZE ||
+							x >= skinSize ||
 							y < 0 ||
-							y >= SKIN_SIZE ||
-							!activeMask[y * SKIN_SIZE + x]
+							y >= skinSize ||
+							!activeMask[y * skinSize + x]
 						) {
 							continue;
 						}
@@ -399,15 +546,28 @@ export default function SkinEditorPage() {
 		},
 		[
 			activeMask,
-			baseMask,
+			baseRegions,
 			brushSize,
 			faceRegions,
-			getFullContext,
 			gridVisible,
-			overlayMask,
+			layer,
+			overlayRegions,
 			overlayVisible,
+			skinSize,
 			tool,
 		],
+	);
+
+	const scheduleEditorRender = useCallback(
+		(brushPreview?: [number, number]) => {
+			renderPreviewPixelRef.current = brushPreview;
+			if (renderFrameRef.current !== null) return;
+			renderFrameRef.current = window.requestAnimationFrame(() => {
+				renderFrameRef.current = null;
+				renderEditor(renderPreviewPixelRef.current);
+			});
+		},
+		[renderEditor],
 	);
 
 	useEffect(() => {
@@ -438,26 +598,40 @@ export default function SkinEditorPage() {
 				try {
 					const image = await loadImage(sourceUrl);
 					if (controller.signal.aborted) return;
-					const normalized = normalizeSkinImage(image);
-					if (
-						metadata.texture_model === "slim" &&
-						metadata.width === metadata.height * 2
-					) {
+					const dimensions = analyzeSkinImageDimensions(
+						image.width,
+						image.height,
+						maxTexturePixels,
+					);
+					const normalized = normalizeSkinImage(image, maxTexturePixels);
+					if (metadata.texture_model === "slim" && dimensions.legacy) {
 						repackSkinCanvasModel(normalized, "default", "slim");
 					}
+					resizeFullCanvas(normalized.width);
 					const context = getFullContext();
-					context.clearRect(0, 0, SKIN_SIZE, SKIN_SIZE);
+					context.clearRect(0, 0, normalized.width, normalized.height);
 					context.drawImage(normalized, 0, 0);
 					const snapshot = {
-						image: context.getImageData(0, 0, SKIN_SIZE, SKIN_SIZE),
+						image: context.getImageData(
+							0,
+							0,
+							normalized.width,
+							normalized.height,
+						),
 						model: metadata.texture_model,
 					};
 					originalRef.current = snapshot;
+					currentStateIdRef.current = 0;
+					savedStateIdRef.current = 0;
+					nextStateIdRef.current = 1;
 					allowNavigationRef.current = false;
 					historyRef.current = [];
 					redoRef.current = [];
+					pendingHistoryRef.current = null;
+					strokeBeforeRef.current = null;
 					setTexture(metadata);
-					setModel(metadata.texture_model);
+					setCurrentModel(metadata.texture_model);
+					setZoom(1);
 					setDirty(false);
 					setHistoryRevision((value) => value + 1);
 					setRevision((value) => value + 1);
@@ -479,37 +653,50 @@ export default function SkinEditorPage() {
 			}
 		})();
 		return () => controller.abort();
-	}, [getFullContext, t, textureId, validTextureId]);
+	}, [
+		getFullContext,
+		maxTexturePixels,
+		resizeFullCanvas,
+		setCurrentModel,
+		t,
+		textureId,
+		validTextureId,
+	]);
 
 	useEffect(() => {
 		if (loading || loadError || !fullCanvasRef.current) return;
 		const original = originalRef.current;
 		if (!original) return;
+		resizeFullCanvas(original.image.width);
 		getFullContext().putImageData(original.image, 0, 0);
-	}, [getFullContext, loadError, loading]);
+	}, [getFullContext, loadError, loading, resizeFullCanvas]);
 
 	useEffect(() => {
 		if (loading || loadError) return;
 		if (editorCanvasRef.current) {
 			editorCanvasRef.current.dataset.contentRevision = String(revision);
 		}
-		renderEditor(hoveredPixel ?? undefined);
-		drawThumbnail(
+		scheduleEditorRender(hoveredPixel ?? undefined);
+	}, [hoveredPixel, loadError, loading, revision, scheduleEditorRender]);
+
+	useEffect(() => {
+		if (loading || loadError) return;
+		for (const canvas of [
 			navigatorCanvasRef.current,
-			overlayVisible ? undefined : baseMask,
-		);
-		drawThumbnail(baseThumbnailRef.current, baseMask);
-		drawThumbnail(overlayThumbnailRef.current, overlayMask);
+			baseThumbnailRef.current,
+			overlayThumbnailRef.current,
+		]) {
+			if (canvas) canvas.dataset.contentRevision = String(revision);
+		}
+		drawThumbnail(navigatorCanvasRef.current, overlayVisible ? "both" : "base");
+		drawThumbnail(baseThumbnailRef.current, "base");
+		drawThumbnail(overlayThumbnailRef.current, "overlay");
 		updateNavigatorRect();
 	}, [
-		baseMask,
 		drawThumbnail,
-		hoveredPixel,
 		loadError,
 		loading,
-		overlayMask,
 		overlayVisible,
-		renderEditor,
 		revision,
 		updateNavigatorRect,
 	]);
@@ -519,24 +706,14 @@ export default function SkinEditorPage() {
 		let cancelled = false;
 		const previewCanvas = document.createElement("canvas");
 		previewCanvas.dataset.contentRevision = String(revision);
-		previewCanvas.width = SKIN_SIZE;
-		previewCanvas.height = SKIN_SIZE;
+		previewCanvas.width = skinSize;
+		previewCanvas.height = skinSize;
 		const context = previewCanvas.getContext("2d");
 		if (!context) return;
 		if (overlayVisible) {
 			context.drawImage(fullCanvasRef.current, 0, 0);
 		} else {
-			const source = getFullContext().getImageData(0, 0, SKIN_SIZE, SKIN_SIZE);
-			const output = context.createImageData(SKIN_SIZE, SKIN_SIZE);
-			for (let index = 0; index < baseMask.length; index += 1) {
-				if (!baseMask[index]) continue;
-				const offset = index * 4;
-				output.data[offset] = source.data[offset];
-				output.data[offset + 1] = source.data[offset + 1];
-				output.data[offset + 2] = source.data[offset + 2];
-				output.data[offset + 3] = source.data[offset + 3];
-			}
-			context.putImageData(output, 0, 0);
+			drawSkinRegions(context, fullCanvasRef.current, baseRegions, skinSize);
 		}
 		previewCanvas.toBlob((blob) => {
 			if (!blob || cancelled) return;
@@ -548,10 +725,13 @@ export default function SkinEditorPage() {
 		return () => {
 			cancelled = true;
 		};
-	}, [baseMask, getFullContext, loadError, loading, overlayVisible, revision]);
+	}, [baseRegions, loadError, loading, overlayVisible, revision, skinSize]);
 
 	useEffect(
 		() => () => {
+			if (renderFrameRef.current !== null) {
+				window.cancelAnimationFrame(renderFrameRef.current);
+			}
 			if (previewUrlRef.current) {
 				URL.revokeObjectURL(previewUrlRef.current);
 			}
@@ -570,13 +750,13 @@ export default function SkinEditorPage() {
 			const modifier = event.metaKey || event.ctrlKey;
 			if (modifier && event.key.toLowerCase() === "z") {
 				event.preventDefault();
-				if (event.shiftKey) redo();
-				else undo();
+				if (event.shiftKey) redoActionRef.current();
+				else undoActionRef.current();
 				return;
 			}
 			if (modifier && event.key.toLowerCase() === "y") {
 				event.preventDefault();
-				redo();
+				redoActionRef.current();
 				return;
 			}
 			if (event.key === "b") setTool("brush");
@@ -586,43 +766,69 @@ export default function SkinEditorPage() {
 		};
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
-	});
+	}, []);
 
-	function pushHistory() {
-		historyRef.current.push(currentSnapshot());
-		if (historyRef.current.length > HISTORY_LIMIT) {
-			historyRef.current.shift();
-		}
+	function commitMutation(entry: SkinEditorHistoryEntry | null) {
+		if (!entry) throw new Error("missing_skin_history");
+		pushBoundedHistory(historyRef.current, entry);
 		redoRef.current = [];
-		setHistoryRevision((value) => value + 1);
-	}
-
-	function commitMutation(nextModel = model) {
-		updateDirtyState(nextModel);
+		pendingHistoryRef.current = null;
+		const nextStateId = nextStateIdRef.current;
+		nextStateIdRef.current += 1;
+		currentStateIdRef.current = nextStateId;
+		setDirty(nextStateId !== savedStateIdRef.current);
 		setRevision((value) => value + 1);
 		setHistoryRevision((value) => value + 1);
 	}
 
-	function restoreSnapshot(snapshot: EditorSnapshot) {
-		getFullContext().putImageData(snapshot.image, 0, 0);
+	function restoreHistoryEntry(entry: SkinEditorHistoryEntry) {
+		const canvas = fullCanvasRef.current;
+		if (!canvas || canvas.width !== canvas.height) {
+			throw new Error("invalid_skin_history");
+		}
+		const restored = restoreSkinHistoryEntry(
+			entry,
+			{
+				model,
+				savedStateId: savedStateIdRef.current,
+				size: canvas.width,
+				stateId: currentStateIdRef.current,
+			},
+			{
+				restoreSnapshot: (image) => {
+					resizeFullCanvas(image.width);
+					getFullContext().putImageData(image, 0, 0);
+				},
+				snapshot: () => currentSnapshot().image,
+				swapPixels: (indices, colors, size) =>
+					swapPixelColors(getFullContext(), indices, colors, size),
+			},
+		);
+		currentStateIdRef.current = restored.stateId;
+		setDirty(restored.dirty);
 		clearHoverState();
-		setModel(snapshot.model);
-		commitMutation(snapshot.model);
+		setCurrentModel(restored.model);
+		setRevision((value) => value + 1);
+		setHistoryRevision((value) => value + 1);
+		return restored.inverse;
 	}
 
 	function undo() {
+		if (loading || savingMode) return;
 		const previous = historyRef.current.pop();
-		if (!previous || loading || savingMode) return;
-		redoRef.current.push(currentSnapshot());
-		restoreSnapshot(previous);
+		if (!previous) return;
+		pushBoundedHistory(redoRef.current, restoreHistoryEntry(previous));
 	}
 
 	function redo() {
+		if (loading || savingMode) return;
 		const next = redoRef.current.pop();
-		if (!next || loading || savingMode) return;
-		historyRef.current.push(currentSnapshot());
-		restoreSnapshot(next);
+		if (!next) return;
+		pushBoundedHistory(historyRef.current, restoreHistoryEntry(next));
 	}
+
+	undoActionRef.current = undo;
+	redoActionRef.current = redo;
 
 	function canvasPixel(event: { clientX: number; clientY: number }) {
 		const rect = editorCanvasRef.current?.getBoundingClientRect();
@@ -637,17 +843,17 @@ export default function SkinEditorPage() {
 		}
 		return [
 			Math.min(
-				SKIN_SIZE - 1,
+				skinSize - 1,
 				Math.max(
 					0,
-					Math.floor(((event.clientX - rect.left) / rect.width) * SKIN_SIZE),
+					Math.floor(((event.clientX - rect.left) / rect.width) * skinSize),
 				),
 			),
 			Math.min(
-				SKIN_SIZE - 1,
+				skinSize - 1,
 				Math.max(
 					0,
-					Math.floor(((event.clientY - rect.top) / rect.height) * SKIN_SIZE),
+					Math.floor(((event.clientY - rect.top) / rect.height) * skinSize),
 				),
 			),
 		] as [number, number];
@@ -656,6 +862,7 @@ export default function SkinEditorPage() {
 	function paintPixel(pixelX: number, pixelY: number) {
 		const context = getFullContext();
 		const [red, green, blue] = colorToRgb(brushColor);
+		context.fillStyle = `rgb(${red}, ${green}, ${blue})`;
 		let changed = false;
 		for (
 			let offsetY = -Math.floor(brushSize / 2);
@@ -671,16 +878,20 @@ export default function SkinEditorPage() {
 				const y = pixelY + offsetY;
 				if (
 					x < 0 ||
-					x >= SKIN_SIZE ||
+					x >= skinSize ||
 					y < 0 ||
-					y >= SKIN_SIZE ||
-					!activeMask[y * SKIN_SIZE + x]
+					y >= skinSize ||
+					!activeMask[y * skinSize + x]
 				) {
 					continue;
 				}
 				const current = context.getImageData(x, y, 1, 1).data;
+				const pixelIndex = y * skinSize + x;
 				if (tool === "eraser") {
 					if (current[3] === 0) continue;
+					if (!strokeBeforeRef.current?.has(pixelIndex)) {
+						strokeBeforeRef.current?.set(pixelIndex, packedPixel(current));
+					}
 					context.clearRect(x, y, 1, 1);
 				} else {
 					if (
@@ -691,7 +902,9 @@ export default function SkinEditorPage() {
 					) {
 						continue;
 					}
-					context.fillStyle = `rgb(${red}, ${green}, ${blue})`;
+					if (!strokeBeforeRef.current?.has(pixelIndex)) {
+						strokeBeforeRef.current?.set(pixelIndex, packedPixel(current));
+					}
 					context.fillRect(x, y, 1, 1);
 				}
 				changed = true;
@@ -724,50 +937,18 @@ export default function SkinEditorPage() {
 	}
 
 	function floodFill(startX: number, startY: number) {
-		const startIndex = startY * SKIN_SIZE + startX;
-		if (!activeMask[startIndex]) return false;
 		const context = getFullContext();
-		const image = context.getImageData(0, 0, SKIN_SIZE, SKIN_SIZE);
-		const pixels = image.data;
-		const offset = startIndex * 4;
-		const target = [
-			pixels[offset],
-			pixels[offset + 1],
-			pixels[offset + 2],
-			pixels[offset + 3],
-		];
+		const image = context.getImageData(0, 0, skinSize, skinSize);
 		const [red, green, blue] = colorToRgb(brushColor);
-		if (
-			target[0] === red &&
-			target[1] === green &&
-			target[2] === blue &&
-			target[3] === 255
-		) {
-			return false;
-		}
-		const visited = new Uint8Array(SKIN_SIZE * SKIN_SIZE);
-		const queue: Array<[number, number]> = [[startX, startY]];
-		while (queue.length > 0) {
-			const [x, y] = queue.pop() ?? [0, 0];
-			if (x < 0 || x >= SKIN_SIZE || y < 0 || y >= SKIN_SIZE) continue;
-			const index = y * SKIN_SIZE + x;
-			if (visited[index] || !activeMask[index]) continue;
-			const pixelOffset = index * 4;
-			if (
-				pixels[pixelOffset] !== target[0] ||
-				pixels[pixelOffset + 1] !== target[1] ||
-				pixels[pixelOffset + 2] !== target[2] ||
-				pixels[pixelOffset + 3] !== target[3]
-			) {
-				continue;
-			}
-			visited[index] = 1;
-			pixels[pixelOffset] = red;
-			pixels[pixelOffset + 1] = green;
-			pixels[pixelOffset + 2] = blue;
-			pixels[pixelOffset + 3] = 255;
-			queue.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
-		}
+		const changed = floodFillSkinPixels(
+			image.data,
+			skinSize,
+			activeMask,
+			startX,
+			startY,
+			[red, green, blue, 255],
+		);
+		if (!changed) return false;
 		context.putImageData(image, 0, 0);
 		return true;
 	}
@@ -778,7 +959,7 @@ export default function SkinEditorPage() {
 		if (!pixel) return;
 		event.preventDefault();
 		const [x, y] = pixel;
-		if (!activeMask[y * SKIN_SIZE + x]) return;
+		if (!activeMask[y * skinSize + x]) return;
 		if (tool === "picker") {
 			const data = getFullContext().getImageData(x, y, 1, 1).data;
 			if (data[3] > 0) {
@@ -787,21 +968,19 @@ export default function SkinEditorPage() {
 			}
 			return;
 		}
-		pushHistory();
 		if (tool === "bucket") {
-			if (floodFill(x, y)) commitMutation();
-			else {
-				historyRef.current.pop();
-				setHistoryRevision((value) => value + 1);
-			}
+			pendingHistoryRef.current = currentSnapshot();
+			if (floodFill(x, y)) commitMutation(pendingHistoryRef.current);
+			else pendingHistoryRef.current = null;
 			return;
 		}
 		drawingRef.current = true;
 		strokeChangedRef.current = false;
+		strokeBeforeRef.current = new Map();
 		lastPixelRef.current = pixel;
 		event.currentTarget.setPointerCapture(event.pointerId);
 		paintPixel(x, y);
-		renderEditor(pixel);
+		scheduleEditorRender(pixel);
 	}
 
 	function handlePointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
@@ -814,19 +993,28 @@ export default function SkinEditorPage() {
 			paintLine(lastPixelRef.current, pixel);
 			lastPixelRef.current = pixel;
 		}
-		renderEditor(pixel);
+		scheduleEditorRender(pixel);
 	}
 
 	function finishStroke() {
 		if (!drawingRef.current) return;
 		drawingRef.current = false;
 		lastPixelRef.current = null;
-		if (strokeChangedRef.current) {
-			commitMutation();
-		} else {
-			historyRef.current.pop();
-			setHistoryRevision((value) => value + 1);
+		const before = strokeBeforeRef.current;
+		if (strokeChangedRef.current && before && before.size > 0) {
+			const sorted = [...before.entries()].sort(
+				([left], [right]) => left - right,
+			);
+			commitMutation({
+				colors: Uint32Array.from(sorted, ([, color]) => color),
+				indices: Uint32Array.from(sorted, ([index]) => index),
+				kind: "pixels",
+				model,
+				size: skinSize,
+				stateId: currentStateIdRef.current,
+			});
 		}
+		strokeBeforeRef.current = null;
 		strokeChangedRef.current = false;
 	}
 
@@ -837,20 +1025,20 @@ export default function SkinEditorPage() {
 
 	function handlePointerLeave() {
 		clearHoverState();
-		if (!drawingRef.current) renderEditor();
+		if (!drawingRef.current) scheduleEditorRender();
 	}
 
 	function switchModel(nextModel: MinecraftTextureModel) {
 		if (nextModel === model || loading || savingMode) return;
-		pushHistory();
+		pendingHistoryRef.current = currentSnapshot();
 		repackSkinCanvasModel(
 			fullCanvasRef.current as HTMLCanvasElement,
 			model,
 			nextModel,
 		);
 		clearHoverState();
-		setModel(nextModel);
-		commitMutation(nextModel);
+		setCurrentModel(nextModel);
+		commitMutation(pendingHistoryRef.current);
 	}
 
 	async function importSkin(event: ChangeEvent<HTMLInputElement>) {
@@ -864,26 +1052,84 @@ export default function SkinEditorPage() {
 			toast.error(t("skinEditor.error.pngOnly"));
 			return;
 		}
+		if (file.size > maxTextureUploadBytes) {
+			toast.error(
+				t("skinEditor.error.fileSize", {
+					max: Math.ceil(maxTextureUploadBytes / 1024 / 1024),
+				}),
+			);
+			return;
+		}
 		const sourceUrl = URL.createObjectURL(file);
 		try {
 			const image = await loadImage(sourceUrl);
-			const normalized = normalizeSkinImage(image);
-			pushHistory();
+			const dimensions = analyzeSkinImageDimensions(
+				image.width,
+				image.height,
+				maxTexturePixels,
+			);
+			const normalized = normalizeSkinImage(image, maxTexturePixels);
+			const detectedModel = detectSkinModel(normalized, dimensions.legacy);
+			pendingHistoryRef.current = currentSnapshot();
+			resizeFullCanvas(normalized.width);
 			const context = getFullContext();
-			context.clearRect(0, 0, SKIN_SIZE, SKIN_SIZE);
+			context.clearRect(0, 0, normalized.width, normalized.height);
 			context.drawImage(normalized, 0, 0);
-			commitMutation();
-			toast.success(t("skinEditor.importSuccess"));
+			clearHoverState();
+			setZoom(1);
+			setCurrentModel(detectedModel);
+			commitMutation(pendingHistoryRef.current);
+			const importedStateId = currentStateIdRef.current;
+			const correctedModel = detectedModel === "slim" ? "default" : "slim";
+			toast.success(
+				t("skinEditor.importSuccess", {
+					model: t(`skinEditor.model.${detectedModel}`),
+					size: normalized.width,
+				}),
+				{
+					duration: 30_000,
+					action: {
+						label: t("skinEditor.correctImportedModel", {
+							model: t(`skinEditor.model.${correctedModel}`),
+						}),
+						onClick: () => {
+							if (
+								savingModeRef.current ||
+								currentStateIdRef.current !== importedStateId ||
+								modelRef.current !== detectedModel ||
+								!fullCanvasRef.current
+							) {
+								return;
+							}
+							pendingHistoryRef.current = currentSnapshot(detectedModel);
+							setCurrentModel(correctedModel);
+							commitMutation(pendingHistoryRef.current);
+							toast.success(
+								t("skinEditor.importModelCorrected", {
+									model: t(`skinEditor.model.${correctedModel}`),
+								}),
+							);
+						},
+					},
+				},
+			);
 		} catch (error) {
 			const dimensionError =
 				error instanceof Error &&
 				error.message.startsWith("invalid_skin_dimensions:");
+			const pixelLimitError =
+				error instanceof Error &&
+				error.message.startsWith("skin_pixel_limit_exceeded:");
 			toast.error(
 				dimensionError
 					? t("skinEditor.error.dimensions")
-					: t("skinEditor.error.import", {
-							error: formatUnknownError(error),
-						}),
+					: pixelLimitError
+						? t("skinEditor.error.pixelLimit", {
+								limit: maxTexturePixels,
+							})
+						: t("skinEditor.error.import", {
+								error: formatUnknownError(error),
+							}),
 			);
 		} finally {
 			URL.revokeObjectURL(sourceUrl);
@@ -892,9 +1138,9 @@ export default function SkinEditorPage() {
 
 	function clearSkin() {
 		if (loading || savingMode) return;
-		pushHistory();
-		getFullContext().clearRect(0, 0, SKIN_SIZE, SKIN_SIZE);
-		commitMutation();
+		pendingHistoryRef.current = currentSnapshot();
+		getFullContext().clearRect(0, 0, skinSize, skinSize);
+		commitMutation(pendingHistoryRef.current);
 	}
 
 	function toggleOverlayVisibility() {
@@ -922,8 +1168,9 @@ export default function SkinEditorPage() {
 	}
 
 	function markSaved(nextTexture: MinecraftWardrobeTextureMetadata) {
-		const snapshot = currentSnapshot(model);
+		const snapshot = currentSavedSnapshot(model);
 		originalRef.current = snapshot;
+		savedStateIdRef.current = currentStateIdRef.current;
 		historyRef.current = [];
 		redoRef.current = [];
 		setTexture(nextTexture);
@@ -980,7 +1227,7 @@ export default function SkinEditorPage() {
 			markSaved(copied);
 			toast.success(t("skinEditor.copySuccess"));
 			allowNavigationRef.current = true;
-			navigate(accountWardrobeEditorPath(copied.id), { replace: true });
+			navigate(accountWardrobeEditorPath(copied.id));
 		} catch (error) {
 			toast.error(formatUnknownError(error));
 		} finally {
@@ -990,7 +1237,7 @@ export default function SkinEditorPage() {
 
 	function changeZoom(nextZoom: number) {
 		const viewport = viewportRef.current;
-		const clamped = Math.min(4, Math.max(1, nextZoom));
+		const clamped = Math.min(maxZoom, Math.max(1, nextZoom));
 		if (!viewport) {
 			setZoom(clamped);
 			return;
@@ -1031,17 +1278,17 @@ export default function SkinEditorPage() {
 		updateNavigatorRect();
 	}
 
-	function countTransparentBasePixels() {
+	const transparentBasePixels = useMemo(() => {
 		if (loading || loadError || !fullCanvasRef.current) return 0;
-		const data = getFullContext().getImageData(0, 0, SKIN_SIZE, SKIN_SIZE).data;
+		const context = getFullContext();
+		context.canvas.dataset.contentRevision = String(revision);
+		const data = context.getImageData(0, 0, skinSize, skinSize).data;
 		let count = 0;
 		for (let index = 0; index < baseMask.length; index += 1) {
 			if (baseMask[index] && data[index * 4 + 3] === 0) count += 1;
 		}
 		return count;
-	}
-
-	const transparentBasePixels = countTransparentBasePixels();
+	}, [baseMask, getFullContext, loadError, loading, revision, skinSize]);
 
 	if (loading) {
 		return <SkinEditorLoading canvasRef={fullCanvasRef} />;
@@ -1107,7 +1354,7 @@ export default function SkinEditorPage() {
 									{t("skinEditor.title")}
 								</h1>
 								<span className="rounded-md border border-border/70 bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground">
-									64 × 64
+									{skinSize} × {skinSize} · {skinSize / SKIN_SIZE}x
 								</span>
 								{dirty ? (
 									<span className="rounded-md bg-amber-500/12 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
@@ -1206,9 +1453,24 @@ export default function SkinEditorPage() {
 						</div>
 						<div
 							className="relative aspect-square touch-none overflow-hidden rounded-md border border-border/70 bg-[#15191f] p-1"
-							onPointerDown={navigateFromMiniMap}
+							onPointerDown={(event) => {
+								event.currentTarget.setPointerCapture(event.pointerId);
+								navigateFromMiniMap(event);
+							}}
 							onPointerMove={(event) => {
-								if (event.buttons === 1) navigateFromMiniMap(event);
+								if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+									navigateFromMiniMap(event);
+								}
+							}}
+							onPointerUp={(event) => {
+								if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+									event.currentTarget.releasePointerCapture(event.pointerId);
+								}
+							}}
+							onPointerCancel={(event) => {
+								if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+									event.currentTarget.releasePointerCapture(event.pointerId);
+								}
 							}}
 						>
 							<canvas
@@ -1234,7 +1496,7 @@ export default function SkinEditorPage() {
 								variant="outline"
 								aria-label={t("skinEditor.zoomOut")}
 								disabled={zoom <= 1}
-								onClick={() => changeZoom(zoom - 0.25)}
+								onClick={() => changeZoom(zoom - zoomStep)}
 							>
 								<Icon name="Minus" className="size-3.5" />
 							</Button>
@@ -1252,8 +1514,8 @@ export default function SkinEditorPage() {
 								size="icon"
 								variant="outline"
 								aria-label={t("skinEditor.zoomIn")}
-								disabled={zoom >= 4}
-								onClick={() => changeZoom(zoom + 0.25)}
+								disabled={zoom >= maxZoom}
+								onClick={() => changeZoom(zoom + zoomStep)}
 							>
 								<Icon name="Plus" className="size-3.5" />
 							</Button>
@@ -1425,8 +1687,8 @@ export default function SkinEditorPage() {
 						>
 							<canvas
 								ref={editorCanvasRef}
-								width={EDITOR_CANVAS_SIZE}
-								height={EDITOR_CANVAS_SIZE}
+								width={editorCanvasSize}
+								height={editorCanvasSize}
 								className={cn(
 									"block size-full touch-none rounded-sm shadow-2xl [image-rendering:pixelated]",
 									tool === "picker" && "cursor-crosshair",
@@ -1440,7 +1702,7 @@ export default function SkinEditorPage() {
 								onWheel={(event) => {
 									if (!event.ctrlKey && !event.metaKey) return;
 									event.preventDefault();
-									changeZoom(zoom + (event.deltaY < 0 ? 0.25 : -0.25));
+									changeZoom(zoom + (event.deltaY < 0 ? zoomStep : -zoomStep));
 								}}
 							/>
 						</div>
